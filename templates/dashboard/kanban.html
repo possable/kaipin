@@ -1,0 +1,338 @@
+{% extends "base.html" %}
+{% block title %}产品看板{% endblock %}
+{% block content %}
+<div class="kanban-header">
+    <div>
+        <h2>产品研发进度看板</h2>
+        <div class="subtitle">全景掌控产品研发进展，协同管理，高效推进，按时交付</div>
+    </div>
+    {% if user.profile.is_admin %}
+    <a href="{% url 'product_create' %}" class="btn btn-primary">
+        <i class="bi bi-plus-lg"></i> 新建项目
+    </a>
+    {% endif %}
+</div>
+
+<!-- KPI 统计卡片：动态跟随 StageTemplate，各阶段进行中项目数 -->
+<section class="kpi-row" style="grid-template-columns:repeat({{ stage_infos|length|add:1 }},1fr);">
+    <a class="kpi-card" href="/" title="查看全部项目">
+        <div class="kpi-icon"><i class="bi bi-collection"></i></div>
+        <div class="kpi-title">项目总数</div>
+        <div class="kpi-num">{{ kpi_total|default:"0" }}</div>
+        <div class="kpi-foot">全部项目</div>
+    </a>
+    {% for si in stage_infos %}
+    <a class="kpi-card{% if forloop.last %} purple{% endif %}"
+       href="?stage={{ si.name|urlencode }}"
+       title="筛选：处于{{ si.name }}阶段的项目">
+        <div class="kpi-icon"><i class="bi {{ si.icon }}"></i></div>
+        <div class="kpi-title">{{ si.name }}</div>
+        <div class="kpi-num">{{ si.count }}</div>
+        <div class="kpi-foot">进行中</div>
+    </a>
+    {% endfor %}
+</section>
+
+<!-- 筛选栏 -->
+<form method="get" class="filterbar">
+    <div class="field">
+        <label>关键词搜索</label>
+        <input type="text" name="q" class="control" placeholder="品名/产品名/品牌..."
+               value="{{ search_q }}">
+    </div>
+    <div class="field">
+        <label>负责人</label>
+        <input type="text" class="control user-search" list="users-datalist" id="assignee-input"
+               placeholder="搜索..." autocomplete="off"
+               value="{% if filter_assignee %}{{ filter_assignee_name }}{% endif %}"
+               data-userid="{{ filter_assignee }}">
+        <input type="hidden" name="assignee" id="assignee-hidden" value="{{ filter_assignee }}">
+        <datalist id="users-datalist">
+            {% for u in all_users %}
+            <option value="{{ u.first_name|default:u.username }}{% if not u.is_active %} (已离职){% endif %}" data-id="{{ u.id }}">
+            {% endfor %}
+        </datalist>
+    </div>
+    <div class="field">
+        <label>项目状态</label>
+        <select name="status" class="control">
+            <option value="all" {% if status_filter == 'all' %}selected{% endif %}>全部</option>
+            <option value="active" {% if status_filter == 'active' %}selected{% endif %}>进行中</option>
+            <option value="overdue" {% if status_filter == 'overdue' %}selected{% endif %}>已超期</option>
+            <option value="draft" {% if status_filter == 'draft' %}selected{% endif %}>待开始</option>
+            <option value="completed" {% if status_filter == 'completed' %}selected{% endif %}>已完成</option>
+            <option value="cancelled" {% if status_filter == 'cancelled' %}selected{% endif %}>已取消</option>
+        </select>
+    </div>
+    <div class="field">
+        <label>项目类型</label>
+        <select name="category" class="control">
+            <option value="">全部</option>
+            <option value="老品迭代" {% if filter_category == '老品迭代' %}selected{% endif %}>老品迭代</option>
+            <option value="新品开发" {% if filter_category == '新品开发' %}selected{% endif %}>新品开发</option>
+        </select>
+    </div>
+    <div class="field" style="min-width:200px;">
+        <label>时间筛选</label>
+        <div style="display:flex;gap:4px;align-items:center;">
+            <select name="time_type" class="control" style="width:70px;flex-shrink:0;padding:0 6px;">
+                <option value="" {% if not filter_time_type %}selected{% endif %}>不限</option>
+                <option value="created" {% if filter_time_type == 'created' %}selected{% endif %}>创建</option>
+            </select>
+            <input type="date" name="date_from" class="control" value="{{ filter_date_from }}" style="padding:0 6px;">
+            <span style="color:var(--muted);flex-shrink:0;">至</span>
+            <input type="date" name="date_to" class="control" value="{{ filter_date_to }}" style="padding:0 6px;">
+        </div>
+    </div>
+    <div class="field" style="flex:0;display:flex;gap:8px;align-items:flex-end;margin-left:2cm;">
+        <button type="submit" class="btn-search">搜索</button>
+        {% if has_filter %}
+        <a href="/" class="btn-reset">重置</a>
+        {% endif %}
+    </div>
+</form>
+
+<!-- 主体：表格 + 右侧面板 -->
+<div class="kanban-layout">
+<div class="kanban-main">
+<section class="table-panel">
+    <table>
+    <colgroup>
+        <col style="width:120px"><col style="width:300px"><col style="width:65px">
+        <col style="width:85px"><col style="width:85px"><col style="width:70px"><col style="width:90px">
+        <col style="width:55px"><col style="width:60px">
+    </colgroup>
+    <thead><tr>
+        <th>项目名称</th><th>阶段进度</th><th>负责人</th>
+        <th>开始时间</th><th>预计结束时间</th><th>剩余天数</th><th>状态</th>
+        <th>优先级</th><th>操作</th>
+    </tr></thead>
+    <tbody>
+    {% for p in products %}
+    <tr>
+        <td>
+            <button type="button" class="project-name" onclick="event.stopPropagation();openProductProgressModal({{ p.id }}, '{{ p.name|escapejs }}')">{{ p.name }}</button>
+        </td>
+        <td>
+            {% if p.all_stages %}
+            <div class="stage-progress">
+                <div class="stage-line">
+                    <div class="stage-line-fill {% if p.has_overdue %}is-overdue{% endif %}" style="width:{{ p.progress_pct }}%"></div>
+                </div>
+                <div class="stage-points">
+                    {% for s in p.all_stages %}
+                    <button type="button" class="stage-pt color-{{ s.color }}" title="{{ s.name }} · {{ s.tasks_done }}/{{ s.tasks_total }} 任务完成{% if s.has_overdue %} · 已超期{% endif %}" onclick="event.stopPropagation();openStageModal({{ s.id }}, '{{ s.name|escapejs }}')"></button>
+                    {% endfor %}
+                </div>
+                <div class="stage-labels">
+                    {% for s in p.all_stages %}
+                    <span>{{ s.name|truncatechars:4 }}</span>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </td>
+        <td>
+            {% if p.can_message_product %}
+                <button type="button" class="person-link{% if p.product_assignee_inactive %} user-inactive{% endif %}" title="{% if p.product_assignee_inactive %}该员工已离职{% endif %}" onclick="openMessageModal(event, 'product', {{ p.id }}, '{{ p.product_assignee|escapejs }}')">
+                    {{ p.product_assignee }}{% if p.product_assignee_inactive %}（已离职）{% endif %}
+                </button>
+            {% else %}
+                <span class="{% if p.product_assignee_inactive %}user-inactive{% endif %}" title="{% if p.product_assignee_inactive %}该员工已离职{% endif %}">
+                    {{ p.product_assignee|default:'--' }}{% if p.product_assignee_inactive %}（已离职）{% endif %}
+                </span>
+            {% endif %}
+        </td>
+        <td>{{ p.start_date|date:'Y-m-d'|default:'-------------' }}</td>
+        <td>{{ p.expected_end_date|date:'Y-m-d'|default:'-------------' }}</td>
+        <td>
+            {% if p.days_remain %}<span class="days-text {% if p.has_overdue %}red{% else %}green{% endif %}">{{ p.days_remain }}</span>{% else %}<span>--------</span>{% endif %}
+        </td>
+        <td>
+            {% if p.overdue_tasks %}
+            <button type="button" class="status-badge overdue is-clickable" title="点击查看已超期原因"
+                    onclick="event.stopPropagation();openAlertModal('{{ p.name|escapejs }}', [{% for t in p.overdue_tasks %}{label:'{{ t.stage_name|escapejs }}·{{ t.name|escapejs }}', person:'{{ t.assignee|escapejs }}', canMessage:{{ t.can_message|yesno:'true,false' }}, entityType:'task', entityId:{{ t.task_id }}}{% if not forloop.last %},{% endif %}{% endfor %}])">
+                {{ p.status_label }}
+            </button>
+            {% elif p.block_reason %}
+            <button type="button" class="status-badge in_progress is-clickable" title="点击查看详情"
+                    onclick="event.stopPropagation();openAlertModal('{{ p.name|escapejs }}', [{label:'{{ p.block_reason|escapejs }}', person:'{{ p.block_person|escapejs }}', canMessage:{{ p.can_message_stage|yesno:'true,false' }}, entityType:'stage', entityId:{{ p.stage_id }}}])">
+                {{ p.status_label }}
+            </button>
+            {% else %}
+            <span class="status-badge {{ p.status_class }}">{{ p.status_label }}</span>
+            {% endif %}
+        </td>
+        <td>
+            <div class="priority-cell" title="根据剩余天数判定：剩余 <10 天为高，<31 天为中，其他为低">
+                <span class="priority-dot {% if p.priority == 'high' %}red{% elif p.priority == 'mid' %}orange{% else %}green{% endif %}"></span>
+                {% if p.priority == 'high' %}高{% elif p.priority == 'mid' %}中{% else %}低{% endif %}
+            </div>
+        </td>
+        <td>
+            <button type="button" class="kanban-action-btn" title="查看详情" onclick="event.stopPropagation();openProductModal({{ p.id }}, '{{ p.name|escapejs }}')"><i class="bi bi-eye"></i></button>
+            <a href="{% url 'export_csv' %}?product={{ p.id }}" class="kanban-action-btn" title="导出" onclick="event.stopPropagation()"><i class="bi bi-download"></i></a>
+            {% if p.can_delete %}
+            <button type="button" class="kanban-action-btn delete" title="删除" onclick="event.stopPropagation();deleteArchivedProduct({{ p.id }}, '{{ p.name|escapejs }}', this)"><i class="bi bi-trash"></i></button>
+            {% endif %}
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+    </table>
+
+    {% if not has_products %}
+    <div class="empty-state">
+        <i class="bi bi-inbox"></i>
+        <p>暂无相关项目</p>
+        {% if user.profile.is_admin %}
+        <p style="margin-top:8px;font-size:13px;">
+            <a href="{% url 'product_create' %}" style="color:var(--green);">
+                <i class="bi bi-plus-lg"></i> 点击这里新建项目
+            </a>
+        </p>
+        {% elif has_filter %}
+        <p style="margin-top:8px;font-size:12px;">尝试 <a href="/" style="color:var(--green);">清除筛选</a> 查看全部项目</p>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% if page_obj.paginator.num_pages > 1 %}
+    <div class="pagination-bar">
+        <span class="page-info">共 {{ page_obj.paginator.count }} 条，第 {{ page_obj.number }}/{{ page_obj.paginator.num_pages }} 页</span>
+        <div class="page-btns">
+            {% if page_obj.has_previous %}
+            <a href="?page={{ page_obj.previous_page_number }}{% if search_q %}&q={{ search_q }}{% endif %}{% if filter_assignee %}&assignee={{ filter_assignee }}{% endif %}{% if status_filter != 'all' %}&status={{ status_filter }}{% endif %}{% if filter_category %}&category={{ filter_category }}{% endif %}{% if filter_time_type %}&time_type={{ filter_time_type }}{% endif %}{% if filter_date_from %}&date_from={{ filter_date_from }}{% endif %}{% if filter_date_to %}&date_to={{ filter_date_to }}{% endif %}" class="page-btn">‹ 上一页</a>
+            {% endif %}
+            {% if page_obj.has_next %}
+            <a href="?page={{ page_obj.next_page_number }}{% if search_q %}&q={{ search_q }}{% endif %}{% if filter_assignee %}&assignee={{ filter_assignee }}{% endif %}{% if status_filter != 'all' %}&status={{ status_filter }}{% endif %}{% if filter_category %}&category={{ filter_category }}{% endif %}{% if filter_time_type %}&time_type={{ filter_time_type }}{% endif %}{% if filter_date_from %}&date_from={{ filter_date_from }}{% endif %}{% if filter_date_to %}&date_to={{ filter_date_to }}{% endif %}" class="page-btn">下一页 ›</a>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</section>
+</div>
+
+<!-- 右侧面板 -->
+<aside class="right-panel">
+    <section class="side-card">
+        <div class="side-card-title">
+            待办事项
+            <button type="button" class="more" onclick="toggleTodoAddForm(event)" title="添加待办">+ 添加</button>
+        </div>
+        <div class="todo-add-form" id="todo-add-form" style="display:none;padding:8px 12px;border-bottom:1px solid var(--line);">
+            <input type="text" id="todo-content-input" class="form-input" placeholder="输入待办内容..." maxlength="200" style="width:100%;font-size:12px;margin-bottom:6px;"
+                   onkeydown="handleTodoInputKey(event)">
+            <input type="datetime-local" id="todo-due-input" class="form-input" style="width:100%;font-size:12px;margin-bottom:6px;">
+            <div style="display:flex;gap:6px;">
+                <button type="button" class="btn btn-primary btn-sm" onclick="submitTodo()" style="flex:1;">添加</button>
+                <button type="button" class="btn btn-outline btn-sm" onclick="toggleTodoAddForm(event)">取消</button>
+            </div>
+        </div>
+        <div class="todo-list" id="todo-list">
+            {% for t in user_todos %}
+            <label class="todo-item {% if t.is_done %}is-done{% endif %}" data-todo-id="{{ t.id }}">
+                <input type="checkbox" {% if t.is_done %}checked{% endif %} onchange="toggleTodo({{ t.id }}, this)">
+                {% if t.source_product_id %}<i class="bi bi-briefcase" title="来自项目（总盯）" style="color:var(--green);flex-shrink:0;"></i>{% elif t.source_stage_id %}<i class="bi bi-diagram-3" title="来自阶段（推进）" style="color:var(--green);flex-shrink:0;"></i>{% elif t.source_task_id %}<i class="bi bi-check-square" title="来自任务" style="color:var(--green);flex-shrink:0;"></i>{% endif %}
+                <span class="todo-text">{{ t.content }}</span>
+                {% if t.due_at %}<span class="todo-time">{{ t.due_at|date:'m-d H:i' }}</span>{% endif %}
+                {% if not t.is_auto %}<button type="button" class="todo-delete-btn" title="删除" onclick="deleteTodo({{ t.id }}, event)">×</button>{% endif %}
+            </label>
+            {% empty %}
+            <div class="todo-empty" style="padding:16px 12px;text-align:center;color:var(--muted);font-size:12px;">
+                暂无待办，点击右上角 + 添加
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    <section class="side-card">
+        <div class="side-card-title">系统公告
+            {% if user.profile.is_admin %}
+            <a href="{% url 'announcement_list' %}" class="more">管理</a>
+            {% endif %}
+        </div>
+        <div class="risk-list">
+            {% for ann in announcements %}
+            <div class="risk-item" title="{{ ann.content }}">
+                <div class="risk-icon">
+                    <i class="bi {% if ann.is_pinned %}bi-pin-angle-fill{% else %}bi-megaphone-fill{% endif %}"
+                       style="color:{% if ann.is_pinned %}var(--orange){% else %}var(--green){% endif %};font-size:20px;"></i>
+                </div>
+                <div class="risk-copy">
+                    <strong>{{ ann.title }}</strong>
+                    <span>{{ ann.content }}</span>
+                    <span class="risk-time">{{ ann.created_at|date:"Y-m-d H:i" }}</span>
+                </div>
+            </div>
+            {% empty %}
+            <div class="todo-empty" style="padding:16px 12px;text-align:center;color:var(--muted);font-size:12px;">
+                暂无公告
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+</aside>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{% load static %}
+<script>
+const ALL_USERS = [{% for u in all_users %}{id:{{u.id}},name:"{{u.first_name|default:u.username|escapejs}}"}{% if not forloop.last %},{% endif %}{% endfor %}];
+
+// 筛选状态记忆：提交时存 localStorage，进入看板 URL 无参数则跳回上次筛选
+(function rememberKanbanFilters() {
+    const LS_KEY = 'kanban_filters_v1';
+    const urlParams = new URLSearchParams(location.search);
+    const hasAnyParam = ['q','assignee','status','category','time_type','date_from','date_to','page'].some(k => urlParams.has(k));
+
+    if (!hasAnyParam) {
+        try {
+            const saved = localStorage.getItem(LS_KEY);
+            if (saved) {
+                const params = JSON.parse(saved);
+                const q = new URLSearchParams();
+                Object.keys(params).forEach(k => { if (params[k]) q.set(k, params[k]); });
+                const qs = q.toString();
+                if (qs) { location.replace('?' + qs); return; }
+            }
+        } catch (e) { console.warn('kanban filter restore failed', e); }
+    }
+
+    // 表单提交时把当前筛选存起来
+    const filterForm = document.querySelector('form.filterbar');
+    if (filterForm) {
+        filterForm.addEventListener('submit', () => {
+            const fd = new FormData(filterForm);
+            const params = {};
+            for (const [k, v] of fd.entries()) {
+                if (v) params[k] = v;
+            }
+            try { localStorage.setItem(LS_KEY, JSON.stringify(params)); } catch (e) {}
+        });
+    }
+})();
+</script>
+<script src="{% static 'js/app.js' %}?v=20260824-roadmap17"></script>
+<script>
+const assigneeInput = document.getElementById('assignee-input');
+if (assigneeInput) {
+    assigneeInput.addEventListener('input', function() {
+        const val = this.value.trim();
+        const options = document.querySelectorAll('#users-datalist option');
+        let found = false;
+        options.forEach(function(opt) {
+            if (opt.value === val) {
+                this.setAttribute('data-userid', opt.getAttribute('data-id'));
+                document.getElementById('assignee-hidden').value = opt.getAttribute('data-id');
+                found = true;
+            }
+        }.bind(this));
+        if (!found) {
+            this.setAttribute('data-userid', '');
+            document.getElementById('assignee-hidden').value = '';
+        }
+    });
+}
+</script>
+{% endblock %}

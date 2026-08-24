@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}{{ action }}阶段模板{% endblock %}
+{% block content %}
+<div class="page-card">
+    <h2 class="page-title">{{ action }}阶段模板</h2>
+    {% if action == '删除确认' %}
+    <form method="post">
+        {% csrf_token %}
+        <p>确定要删除阶段 <strong>"{{ stage.name }}"</strong> 吗？此操作不可恢复。</p>
+        <div style="display:flex;gap:8px;margin-top:20px;">
+            <button type="submit" class="btn btn-danger">
+                <i class="bi bi-trash"></i> 确认删除
+            </button>
+            <a href="{% url 'stage_template_list' %}" class="btn btn-outline">取消</a>
+        </div>
+    </form>
+    {% else %}
+    <form method="post">
+        {% csrf_token %}
+        <div class="form-group">
+            <label class="form-label">阶段名称</label>
+            <input type="text" name="name" class="form-input" required
+                   value="{{ stage.name|default:'' }}" placeholder="如：包装设计">
+        </div>
+        <div class="form-group">
+            <label class="form-label">顺序号</label>
+            <input type="number" name="order" class="form-input" required
+                   value="{{ stage.order|default:'' }}" placeholder="如：2">
+        </div>
+        <div class="form-group">
+            <label class="form-label">负责部门</label>
+            <select name="department" class="form-input" required>
+                {% for dept in departments %}
+                    <option value="{{ dept.id }}"
+                        {% if stage and stage.department_id == dept.id %}selected{% endif %}>
+                        {{ dept.name }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label class="form-label">默认阶段负责人</label>
+            <input type="text" class="form-input user-search" list="users-datalist" name="default_assignee_name"
+                   placeholder="搜索负责人..." autocomplete="off"
+                   value="{% if stage.default_assignee %}{{ stage.default_assignee.first_name|default:stage.default_assignee.username }}{% endif %}">
+            <input type="hidden" name="default_assignee" id="default-assignee-id"
+                   value="{% if stage.default_assignee %}{{ stage.default_assignee_id }}{% endif %}">
+            <datalist id="users-datalist">
+                {% for u in all_users %}
+                <option value="{{ u.first_name|default:u.username }}" data-id="{{ u.id }}">
+                {% endfor %}
+            </datalist>
+            <small class="text-muted" style="font-size:11px;">新建品时会自动设为该阶段的默认负责人</small>
+        </div>
+        <div class="form-group">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px;">
+                <input type="checkbox" name="allow_parallel"
+                    {% if stage and stage.allow_parallel %}checked{% endif %}
+                    style="width:18px;height:18px;">
+                允许并行（该阶段无需等待上一阶段完成，可手动开始）
+            </label>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:20px;">
+            <button type="submit" class="btn btn-primary">
+                <i class="bi bi-check-lg"></i> 保存
+            </button>
+            <a href="{% url 'stage_template_list' %}" class="btn btn-outline">取消</a>
+        </div>
+    </form>
+    {% endif %}
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+// datalist 选择时同步更新隐藏字段
+document.querySelector('input[name="default_assignee_name"]').addEventListener('input', function() {
+    const val = this.value.trim();
+    const options = document.querySelectorAll('#users-datalist option');
+    const hidden = document.getElementById('default-assignee-id');
+    let found = false;
+    options.forEach(opt => {
+        if (opt.value === val) {
+            hidden.value = opt.dataset.id;
+            found = true;
+        }
+    });
+    if (!found) hidden.value = '';
+});
+</script>
+{% endblock %}

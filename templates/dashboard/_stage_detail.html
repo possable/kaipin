@@ -1,0 +1,155 @@
+{% load static %}
+<input type="hidden" data-can-edit="{% if stage.can_edit or can_manage %}true{% else %}false{% endif %}">
+{% if not hide_meta %}
+<div class="stage-modal-meta">
+    {% if can_manage %}
+    <input type="text" class="form-input user-search stage-assignee" list="{{ datalist_id|default:'users-datalist' }}"
+           data-field="assignee" data-stage-id="{{ stage.pk }}"
+           placeholder="阶段负责人..." autocomplete="off"
+           style="font-size:12px;padding:4px 8px;width:120px;"
+           value="{% if stage.assignee %}{{ stage.assignee.first_name|default:stage.assignee.username }}{% endif %}"
+           data-userid="{% if stage.assignee %}{{ stage.assignee_id }}{% endif %}">
+    {% elif stage.assignee %}
+    <span style="font-size:12px;color:var(--color-gray-500);">{{ stage.assignee.first_name|default:stage.assignee.username }}</span>
+    {% endif %}
+    {% if stage.assignee and stage.assignee != user and stage.can_edit %}
+    <button type="button" class="person-msg-btn" title="发消息"
+            onclick="openMessageModal(event, 'stage', {{ stage.pk }}, '{{ stage.assignee.first_name|default:stage.assignee.username|escapejs }}')">
+        <i class="bi bi-chat-dots"></i>
+    </button>
+    {% endif %}
+    {% if stage.can_edit %}
+    <input type="date" class="form-input stage-field" data-field="started_at" data-stage-id="{{ stage.pk }}"
+           value="{{ stage.started_at|date:'Y-m-d' }}" style="font-size:12px;padding:4px 6px;width:120px;"
+           title="开始时间">
+    <input type="date" class="form-input stage-field" data-field="expected_end_date" data-stage-id="{{ stage.pk }}"
+           value="{{ stage.expected_end_date|date:'Y-m-d' }}" style="font-size:12px;padding:4px 6px;width:105px;"
+           title="预计结束">
+    {% else %}
+    <span style="font-size:12px;color:var(--muted);">
+        {{ stage.started_at|date:'Y-m-d'|default:'--' }} 至 {{ stage.expected_end_date|date:'Y-m-d'|default:'--' }}
+    </span>
+    <span class="stage-task-count">{{ stage.tasks.count }} 个任务</span>
+    {% endif %}
+</div>
+{% endif %}
+
+    <table class="task-table">
+        <thead>
+            <tr>
+                <th>任务</th>
+                <th style="width:80px;">执行人</th>
+                <th style="width:115px;white-space:nowrap;">开始</th>
+                <th style="width:115px;white-space:nowrap;">预计结束</th>
+                <th style="width:115px;white-space:nowrap;">实际结束</th>
+                <th style="width:70px;">状态</th>
+                <th style="width:60px;">操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for task in stage.tasks.all %}
+            <tr>
+                <td>
+                    {% if task.can_edit %}
+                    <button class="btn btn-sm task-move-btn" title="上移" onclick="event.stopPropagation();moveTask({{ task.pk }}, 'up', this)" style="padding:0 3px;font-size:10px;background:none;border:none;color:var(--muted);cursor:pointer;">▲</button>
+                    <button class="btn btn-sm task-move-btn" title="下移" onclick="event.stopPropagation();moveTask({{ task.pk }}, 'down', this)" style="padding:0 3px;font-size:10px;background:none;border:none;color:var(--muted);cursor:pointer;">▼</button>
+                    {% endif %}
+                    <button type="button" class="task-name" style="background:none;border:none;cursor:pointer;text-align:left;"
+                            onclick="openChecklistModal({{ task.pk }}, '{{ task.name|escapejs }}')">
+                        {% if task.is_milestone %}<i class="bi bi-flag-fill" style="color:#ffd700;" title="里程碑"></i> {% endif %}
+                        {{ task.name }}
+                    </button>
+                    {% if task.checklist_total %}
+                    <span class="checklist-count">{{ task.checklist_done }}/{{ task.checklist_total }}</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <div style="display:flex;gap:2px;align-items:center;">
+                    {% if task.can_edit %}
+                    <input type="text" class="form-input task-field user-search" list="{{ datalist_id|default:'users-datalist' }}" data-field="assignee" data-task-id="{{ task.pk }}"
+                           placeholder="搜索..." autocomplete="off"
+                           style="font-size:11px;padding:3px 4px;width:90px;"
+                           value="{% if task.assignee %}{{ task.assignee.first_name|default:task.assignee.username }}{% endif %}"
+                           data-userid="{% if task.assignee %}{{ task.assignee_id }}{% endif %}">
+                    {% else %}
+                        <span style="font-size:12px;">{{ task.assignee.first_name|default:'--' }}</span>
+                    {% endif %}
+                    {% if task.assignee and task.assignee != user and task.can_edit %}
+                    <button type="button" class="person-msg-btn" title="发消息"
+                            onclick="openMessageModal(event, 'task', {{ task.pk }}, '{{ task.assignee.first_name|default:task.assignee.username|escapejs }}')">
+                        <i class="bi bi-chat-dots"></i>
+                    </button>
+                    {% endif %}
+                    </div>
+                </td>
+                <td>
+                    {% if task.can_manage_time %}
+                    <input type="date" class="form-input task-field" data-field="started_at" data-task-id="{{ task.pk }}"
+                           value="{{ task.started_at|date:'Y-m-d' }}" style="font-size:11px;padding:3px 4px;width:110px;">
+                    {% else %}
+                        <span style="font-size:12px;">{{ task.started_at|date:'m-d'|default:'--' }}</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if task.can_manage_time %}
+                    <input type="date" class="form-input task-field" data-field="expected_end_date" data-task-id="{{ task.pk }}"
+                           value="{{ task.expected_end_date|date:'Y-m-d' }}" style="font-size:11px;padding:3px 4px;width:110px;">
+                    {% else %}
+                        <span style="font-size:12px;">{{ task.expected_end_date|date:'Y-m-d'|default:'--' }}</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <span style="font-size:12px;">{{ task.actual_end_date|date:'Y-m-d'|default:'--' }}</span>
+                </td>
+                <td>
+                    <span class="status-badge task-status-badge color-{{ task.color }}" data-task-id="{{ task.pk }}" style="font-size:11px;">
+                        {{ task.get_status_display }}
+                    </span>
+                </td>
+                {% if task.can_edit %}
+                <td>
+                    <div style="display:flex;gap:2px;">
+                        <button class="btn btn-sm task-complete-btn{% if task.status == 'completed' %} is-completed{% endif %}" title="{% if task.status == 'completed' %}撤销完成{% else %}标记完成{% endif %}" onclick="event.stopPropagation();markTaskComplete({{ task.pk }}, this)">
+                            <i class="bi {% if task.status == 'completed' %}bi-arrow-counterclockwise{% else %}bi-check-lg{% endif %}"></i>
+                        </button>
+                        {% if can_manage %}
+                        <button class="btn btn-danger btn-sm" title="删除" onclick="event.stopPropagation();deleteTask({{ task.pk }})">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                        {% endif %}
+                    </div>
+                </td>
+                {% endif %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    {% if stage.can_edit or can_manage %}
+    <div class="stage-actions">
+
+        {% if can_manage %}
+        <div style="display:flex;gap:6px;flex:1;">
+            <input type="text" class="form-input" style="flex:1;font-size:12px;"
+                   id="new-task-name-{{ stage.pk }}" placeholder="新任务名称...（回车快速添加）"
+                   onkeydown="if(event.key==='Enter'){event.preventDefault();addTask({{ stage.pk }});}">
+            <button class="btn btn-outline btn-sm" onclick="addTask({{ stage.pk }})">
+                <i class="bi bi-plus-lg"></i> 添加
+            </button>
+        </div>
+        {% endif %}
+
+        {% if stage.status == 'in_progress' and stage.department == user.profile.department or can_manage %}
+            {% if stage.all_tasks_completed %}
+            <button class="btn btn-primary btn-sm w-100"
+                    onclick="completeStage({{ stage.pk }})">
+                <i class="bi bi-arrow-right-circle"></i> 标记 {{ stage.name }} 为完成
+            </button>
+            {% else %}
+            <span style="font-size:12px;color:var(--color-gray-500);">
+                <i class="bi bi-info-circle"></i> 完成所有 {{ stage.tasks.count }} 个任务后可推进
+            </span>
+            {% endif %}
+        {% endif %}
+    </div>
+    {% endif %}

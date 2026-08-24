@@ -1,0 +1,8 @@
+Django==5.1
+django-environ==0.11.2
+mysqlclient==2.2.8
+APScheduler==3.11.3
+requests==2.34.2
+Pillow==12.3.0
+pypinyin==0.55.0
+gunicorn==23.0.0

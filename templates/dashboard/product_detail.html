@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}{{ product.name }} - 详情{% endblock %}
+{% block content %}
+
+<!-- 顶部：品名 + 状态 -->
+<div class="detail-header">
+    <div style="display:flex;align-items:center;gap:14px;">
+        <a href="{% url 'kanban' %}" class="breadcrumb-btn">
+            <i class="bi bi-arrow-left"></i> 返回看板
+        </a>
+        <h2>{{ product.name }}</h2>
+        <span class="status-badge {% if product.status == 'active' %}in_progress{% elif product.status == 'completed' %}completed{% else %}overdue{% endif %}">
+            {{ product.get_status_display }}
+        </span>
+    </div>
+    {% if product.status == 'draft' and can_manage %}
+    <button class="btn btn-primary btn-sm" onclick="publishProduct({{ product.pk }})">
+        <i class="bi bi-send"></i> 发布项目
+    </button>
+    {% endif %}
+</div>
+
+{% include 'dashboard/_product_info.html' %}
+<div style="margin-top:24px;"></div>
+
+<!-- 阶段列表（可折叠） -->
+<div class="stage-list">
+    {% for stage in stages %}
+    <div class="stage-row {% if stage.status == 'in_progress' %}is-active{% elif stage.status == 'completed' %}is-done{% else %}is-pending{% endif %}" id="stage-{{ stage.pk }}">
+        <div class="stage-row-header" onclick="toggleStage(this)">
+            <div class="stage-row-left">
+                <i class="bi bi-chevron-right stage-chevron{% if stage.status == 'in_progress' %} open{% endif %}"></i>
+                <span class="stage-order">{{ stage.order }}</span>
+                <span class="stage-name">{{ stage.name }}</span>
+                <span class="status-badge {{ stage.status }}">{{ stage.get_status_display }}</span>
+            </div>
+            <div class="stage-row-right">
+                <span class="stage-dept">{{ stage.department.name }}</span>
+                {% if can_manage %}
+                <input type="text" class="form-input user-search stage-assignee" list="users-datalist"
+                       data-field="assignee" data-stage-id="{{ stage.pk }}"
+                       placeholder="阶段负责人..." autocomplete="off"
+                       style="font-size:11px;padding:3px 6px;width:100px;"
+                       value="{% if stage.assignee %}{{ stage.assignee.first_name|default:stage.assignee.username }}{% endif %}"
+                       data-userid="{% if stage.assignee %}{{ stage.assignee_id }}{% endif %}">
+                {% elif stage.assignee %}
+                <span style="font-size:12px;color:var(--color-gray-500);">{{ stage.assignee.first_name|default:stage.assignee.username }}</span>
+                {% endif %}
+                {% if stage.assignee and stage.assignee != user and stage.can_edit %}
+                <button type="button" class="person-msg-btn" title="发消息"
+                        onclick="event.stopPropagation();openMessageModal(event, 'stage', {{ stage.pk }}, '{{ stage.assignee.first_name|default:stage.assignee.username|escapejs }}')">
+                    <i class="bi bi-chat-dots"></i>
+                </button>
+                {% endif %}
+                {% if can_manage %}
+                <input type="date" class="form-input stage-field" data-field="started_at" data-stage-id="{{ stage.pk }}"
+                       value="{{ stage.started_at|date:'Y-m-d' }}" style="font-size:11px;padding:3px 4px;width:105px;"
+                       title="开始时间">
+                <input type="date" class="form-input stage-field" data-field="expected_end_date" data-stage-id="{{ stage.pk }}"
+                       value="{{ stage.expected_end_date|date:'Y-m-d' }}" style="font-size:11px;padding:3px 4px;width:95px;"
+                       title="预计结束">
+                {% else %}
+                <span class="stage-task-count">{{ stage.tasks.count }} 个任务</span>
+                {% endif %}
+            </div>
+        </div>
+        <div class="stage-row-body{% if stage.status == 'in_progress' %} show{% endif %}">
+            {% include 'dashboard/_stage_detail.html' with datalist_id='users-datalist' hide_meta=True %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// 所有用户列表（供 JS 使用）
+const ALL_USERS = [{% for u in all_users %}{id:{{u.id}},name:"{{u.first_name|default:u.username|escapejs}}"}{% if not forloop.last %},{% endif %}{% endfor %}];
+</script>
+<script src="{% static 'js/app.js' %}"></script>
+{% endblock %}

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}{{ action }}最小事项模板{% endblock %}
+{% block content %}
+<div class="page-card">
+    <h2 class="page-title">{{ stage.name }} · {{ task.name }} · {{ action }}最小事项模板</h2>
+    {% if action == '删除确认' %}
+    <form method="post">
+        {% csrf_token %}
+        <p>确定要删除最小事项 <strong>"{{ item.name }}"</strong> 吗？此操作不可恢复。</p>
+        <div style="display:flex;gap:8px;margin-top:20px;">
+            <button type="submit" class="btn btn-danger">
+                <i class="bi bi-trash"></i> 确认删除
+            </button>
+            <a href="{% url 'checklist_template_list' task.pk %}" class="btn btn-outline">取消</a>
+        </div>
+    </form>
+    {% else %}
+    <form method="post">
+        {% csrf_token %}
+        <div class="form-group">
+            <label class="form-label">事项名称</label>
+            <input type="text" name="name" class="form-input" required
+                   value="{{ item.name|default:'' }}" placeholder="如：确认包材供应商">
+        </div>
+        <div class="form-group">
+            <label class="form-label">排序</label>
+            <input type="number" name="order" class="form-input"
+                   value="{{ item.order|default:'0' }}" placeholder="0">
+        </div>
+        <div style="display:flex;gap:8px;margin-top:20px;">
+            <button type="submit" class="btn btn-primary">
+                <i class="bi bi-check-lg"></i> 保存
+            </button>
+            <a href="{% url 'checklist_template_list' task.pk %}" class="btn btn-outline">取消</a>
+        </div>
+    </form>
+    {% endif %}
+</div>
+{% endblock %}

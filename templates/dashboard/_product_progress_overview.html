@@ -1,0 +1,169 @@
+<input type="hidden" data-can-edit="false">
+<section class="project-progress-overview roadmap-overview"
+         id="project-progress-export-area"
+         data-export-title="{{ product.name }}"
+         data-export-url="{% url 'product_progress_export_png' product.pk %}">
+    <section class="roadmap-summary-card">
+        <div class="roadmap-summary-intro">
+            <span class="roadmap-eyebrow">PRODUCT LIFECYCLE ROADMAP</span>
+            <h3>{{ product.name }} · 项目进度总览</h3>
+            <p><i></i>当前阶段：{{ progress_overview.active_stage_text }}</p>
+        </div>
+
+        <div class="roadmap-progress-ring" style="--project-progress:{{ progress_overview.progress_pct }}%;">
+            <div class="roadmap-progress-ring-inner">
+                <strong>{{ progress_overview.progress_pct }}%</strong>
+                <span>任务完成率</span>
+            </div>
+        </div>
+
+        <div class="roadmap-summary-data">
+            <div class="roadmap-project-info" aria-label="项目时间和负责人信息">
+                <div class="roadmap-info-item">
+                    <i class="bi bi-person-fill"></i>
+                    <span>负责人<strong>{% if product.assignee %}{{ product.assignee.first_name|default:product.assignee.username }}{% else %}未指定{% endif %}</strong></span>
+                </div>
+                <div class="roadmap-info-item">
+                    <i class="bi bi-stopwatch"></i>
+                    <span>开始时间<strong>{{ product.started_at|date:'Y-m-d'|default:'未设置' }}</strong></span>
+                </div>
+                <div class="roadmap-info-item">
+                    <i class="bi bi-clock"></i>
+                    <span>预计结束<strong>{{ product.expected_end_date|date:'Y-m-d'|default:'未设置' }}</strong></span>
+                </div>
+                <div class="roadmap-info-item">
+                    <i class="bi bi-calendar-check"></i>
+                    <span>实际结束<strong>{{ product.actual_end_date|date:'Y-m-d'|default:'未完成' }}</strong></span>
+                </div>
+                <div class="roadmap-info-item">
+                    <i class="bi bi-file-earmark-text"></i>
+                    <span>创建时间<strong>{{ product.created_at|date:'Y-m-d' }}</strong></span>
+                </div>
+            </div>
+
+            <div class="roadmap-summary-metrics">
+                <div><span>阶段完成</span><strong>{{ progress_overview.completed_stages }} / {{ progress_overview.stage_count }}</strong></div>
+                <div><span>任务完成</span><strong>{{ progress_overview.completed_tasks }} / {{ progress_overview.total_tasks }}</strong></div>
+                <div class="{% if progress_overview.overdue_tasks %}is-alert{% endif %}"><span>超期任务</span><strong>{{ progress_overview.overdue_tasks }}</strong></div>
+                <div><span>交付时间</span><strong>{{ progress_overview.remaining_text }}</strong></div>
+            </div>
+        </div>
+    </section>
+
+    <section class="roadmap-timeline-card" style="--roadmap-months:{{ progress_overview.timeline.month_count }};">
+        <header class="roadmap-timeline-header">
+            <div class="roadmap-stage-column-title">阶段 / 里程碑</div>
+            <div class="roadmap-month-track">
+                {% for month in progress_overview.timeline.months %}
+                <span class="roadmap-month"
+                      style="--month-left:{{ month.start_pct }}%;--month-width:{{ month.width_pct }}%;">
+                    {{ month.label }}
+                </span>
+                {% endfor %}
+                {% if progress_overview.timeline.today_visible %}
+                <span class="roadmap-today-label" style="--today-left:{{ progress_overview.timeline.today_pct }}%;">今天</span>
+                {% endif %}
+            </div>
+        </header>
+
+        <div class="roadmap-stage-rows">
+            {% for stage in progress_overview.stages %}
+            <section class="roadmap-stage-row is-{{ stage.status_key }}{% if stage.timeline_align_right %} is-band-align-right{% endif %}">
+                <button type="button"
+                        class="roadmap-stage-label"
+                        title="{{ stage.name }} · {{ stage.status_label }} · {{ stage.department_name }} · {{ stage.assignee_name }}"
+                        onclick="event.stopPropagation();openStageModal({{ stage.id }}, '{{ stage.name|escapejs }}')">
+                    <span class="roadmap-stage-number">{{ forloop.counter|stringformat:'02d' }}</span>
+                    <strong>{{ stage.name }}</strong>
+                    <em>{{ stage.status_label }}</em>
+                </button>
+
+                <div class="roadmap-stage-track">
+                    {% if progress_overview.timeline.today_visible %}
+                    <i class="roadmap-today-line" style="--today-left:{{ progress_overview.timeline.today_pct }}%;"></i>
+                    {% endif %}
+                    <div class="roadmap-stage-band"
+                         style="--band-left:{{ stage.timeline_left_pct }}%;--band-width:{{ stage.timeline_width_pct }}%;--band-right:{{ stage.timeline_right_pct }}%;--band-min-width:{{ stage.timeline_min_width_px }}px;">
+                        <div class="roadmap-milestones">
+                            {% for task in stage.tasks %}
+                            <button type="button"
+                                    class="roadmap-milestone is-{{ task.status_key }}"
+                                    style="--milestone-width:{{ task.display_width_px }}px;"
+                                    title="{{ task.name }} · {{ task.status_label }}{% if task.expected_end_date %} · {{ task.expected_end_date|date:'Y-m-d' }}{% endif %}"
+                                    onclick="event.stopPropagation();openChecklistModal({{ task.id }}, '{{ task.name|escapejs }}')">
+                                <i class="bi {% if task.status_key == 'completed' %}bi-check-circle-fill{% elif task.status_key == 'in_progress' %}bi-play-circle-fill{% elif task.status_key == 'overdue' %}bi-exclamation-circle{% else %}bi-circle{% endif %}"></i>
+                                <span>{{ task.name }}</span>
+                            </button>
+                            {% empty %}
+                            <span class="roadmap-milestone-empty">暂无里程碑</span>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% if stage.status_key == 'overdue' %}
+                    <span class="roadmap-overdue-flag"
+                          style="--band-left:{{ stage.timeline_left_pct }}%;--band-width:{{ stage.timeline_width_pct }}%;">
+                        已超期 <i class="bi bi-exclamation-circle-fill"></i>
+                    </span>
+                    {% endif %}
+                </div>
+            </section>
+            {% empty %}
+            <div class="roadmap-empty">当前项目还没有阶段数据</div>
+            {% endfor %}
+        </div>
+
+        <div class="roadmap-timeline-footer">
+            <div class="roadmap-legend">
+                <span class="is-completed"><i></i>已完成</span>
+                <span class="is-progress"><i></i>进行中</span>
+                <span class="is-overdue"><i></i>有超期</span>
+                <span class="is-pending"><i></i>待开始</span>
+            </div>
+            <div class="project-progress-export-toolbar roadmap-export-actions">
+                <button type="button" class="btn btn-outline btn-sm" onclick="exportProjectProgressPng(this)">
+                    <i class="bi bi-image"></i> 导出 PNG
+                </button>
+                <button type="button" class="btn btn-outline btn-sm" onclick="printProjectProgressOverview(this)">
+                    <i class="bi bi-file-earmark-pdf"></i> 打印 / 保存 PDF
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <section class="project-risk-panel{% if progress_overview.overdue_milestones %} has-risks{% else %} is-clear{% endif %}"
+             aria-label="延期里程碑风险预警">
+        <header class="project-risk-header">
+            <div class="project-risk-heading">
+                <span class="project-risk-kicker">MILESTONE RISK ALERT</span>
+                <h4><i class="bi bi-exclamation-triangle-fill"></i>风险预警</h4>
+                <p>仅汇总当前已延期的里程碑，按逾期天数从高到低排列</p>
+            </div>
+            <span class="project-risk-count">{{ progress_overview.overdue_milestone_count }} 项风险</span>
+        </header>
+
+        {% if progress_overview.overdue_milestones %}
+        <div class="project-risk-list">
+            {% for risk in progress_overview.overdue_milestones %}
+            <button type="button"
+                    class="project-risk-item"
+                    title="{{ risk.stage_name }} · {{ risk.name }} · 已延期 {{ risk.overdue_days }} 天"
+                    onclick="event.stopPropagation();openChecklistModal({{ risk.id }}, '{{ risk.name|escapejs }}')">
+                <span class="project-risk-icon"><i class="bi bi-exclamation-lg"></i></span>
+                <span class="project-risk-main">
+                    <small>{{ risk.stage_name }} · {{ risk.department_name }}</small>
+                    <strong>{{ risk.name }}</strong>
+                </span>
+                <span class="project-risk-meta"><small>负责人</small><strong>{{ risk.assignee_name }}</strong></span>
+                <span class="project-risk-meta"><small>预计结束</small><strong>{{ risk.expected_end_date|date:'Y-m-d' }}</strong></span>
+                <span class="project-risk-meta project-risk-days"><small>已延期</small><strong>{{ risk.overdue_days }} 天</strong></span>
+            </button>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="project-risk-empty">
+            <i class="bi bi-shield-check"></i>
+            <span><strong>暂无延期里程碑</strong><small>当前里程碑进度未发现延期风险</small></span>
+        </div>
+        {% endif %}
+    </section>
+</section>

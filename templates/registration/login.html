@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}登录 - 开品项目管理系统{% endblock %}
+{% block auth_content %}
+<div class="login-page">
+    <div class="login-card">
+        <div class="login-header">
+            <div class="login-icon">
+                <i class="bi bi-box-seam"></i>
+            </div>
+            <h1>开品项目管理系统</h1>
+            <p class="login-subtitle">新品开发全流程协作平台</p>
+        </div>
+        <form method="post" class="login-form">
+            {% csrf_token %}
+            <div class="form-floating mb-3">
+                <input type="text" name="username" id="id_username"
+                       class="form-control" placeholder="用户名" required autofocus>
+                <label for="id_username"><i class="bi bi-person"></i> 用户名</label>
+            </div>
+            <div class="form-floating mb-3 password-field-wrapper">
+                <input type="password" name="password" id="id_password"
+                       class="form-control" placeholder="密码" required>
+                <label for="id_password"><i class="bi bi-lock"></i> 密码</label>
+                <button type="button" class="password-toggle" onclick="togglePassword()" tabindex="-1">
+                    <i class="bi bi-eye" id="pwd-toggle-icon"></i>
+                </button>
+            </div>
+            {% if form.errors %}
+                <div class="alert alert-danger py-2 text-center">用户名或密码错误，请重试</div>
+            {% endif %}
+            <button type="submit" class="btn-login-primary">
+                <i class="bi bi-box-arrow-in-right"></i> 密码登录
+            </button>
+        </form>
+    </div>
+    <p class="login-footer">莱特维健 · 内网系统</p>
+</div>
+
+<script>
+function togglePassword() {
+    const input = document.getElementById('id_password');
+    const icon = document.getElementById('pwd-toggle-icon');
+    if (input.type === 'password') {
+        input.type = 'text';
+        icon.className = 'bi bi-eye-slash';
+    } else {
+        input.type = 'password';
+        icon.className = 'bi bi-eye';
+    }
+}
+</script>
+
+<style>
+.password-field-wrapper { position: relative; }
+.password-toggle {
+    position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+    background: none; border: none; color: #6b7280; cursor: pointer;
+    font-size: 18px; padding: 4px; line-height: 1; z-index: 5;
+}
+.password-toggle:hover { color: #374151; }
+</style>
+{% endblock %}

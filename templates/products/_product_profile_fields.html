@@ -1,0 +1,71 @@
+{# 产品资料字段（选填）。创建表单和详情页编辑区块共用。#}
+<div class="row g-3">
+    <div class="col-md-6">
+        <label class="form-label">产品名称</label>
+        <input type="text" name="product_name" class="form-input" value="{{ product.product_name|default:'' }}">
+    </div>
+    <div class="col-md-6">
+        <label class="form-label">品牌</label>
+        <input type="text" name="brand" class="form-input" value="{{ product.brand|default:'' }}">
+    </div>
+    <div class="col-md-6">
+        <label class="form-label">上架平台</label>
+        <input type="text" name="platforms" class="form-input" placeholder="如：天猫、抖音" value="{{ product.platforms|default:'' }}">
+    </div>
+    <div class="col-md-6">
+        <label class="form-label">所属类目</label>
+        <input type="text" name="category" class="form-input" value="{{ product.category|default:'' }}">
+    </div>
+    <div class="col-md-6">
+        <label class="form-label">产品定位</label>
+        <input type="text" name="positioning" class="form-input" value="{{ product.positioning|default:'' }}">
+    </div>
+    <div class="col-md-6">
+        <label class="form-label">剂型</label>
+        <input type="text" name="dosage_form" class="form-input" value="{{ product.dosage_form|default:'' }}">
+    </div>
+    <div class="col-md-6">
+        <label class="form-label">规格</label>
+        <input type="text" name="specification" class="form-input" value="{{ product.specification|default:'' }}">
+    </div>
+    <div class="col-md-6">
+        <label class="form-label">目标人群</label>
+        <input type="text" name="target_audience" class="form-input" value="{{ product.target_audience|default:'' }}">
+    </div>
+    <div class="col-md-6">
+        <label class="form-label">场景应用</label>
+        <input type="text" name="usage_scenario" class="form-input" value="{{ product.usage_scenario|default:'' }}">
+    </div>
+    <div class="col-md-4">
+        <label class="form-label">建议零售价</label>
+        <input type="number" step="0.01" name="suggested_retail_price" class="form-input" value="{{ product.suggested_retail_price|default:'' }}">
+    </div>
+    <div class="col-md-4">
+        <label class="form-label">建议成本价</label>
+        <input type="number" step="0.01" name="suggested_cost_price" class="form-input" value="{{ product.suggested_cost_price|default:'' }}">
+    </div>
+    <div class="col-md-4">
+        <label class="form-label">预期毛利率(%)</label>
+        <input type="number" step="0.01" name="expected_gross_margin" class="form-input" value="{{ product.expected_gross_margin|default:'' }}">
+    </div>
+    <div class="col-md-12">
+        <label class="form-label">主要成分及含量</label>
+        <textarea name="main_ingredients" class="form-input" rows="2">{{ product.main_ingredients|default:'' }}</textarea>
+    </div>
+    <div class="col-md-12">
+        <label class="form-label">功效描述</label>
+        <textarea name="efficacy" class="form-input" rows="2">{{ product.efficacy|default:'' }}</textarea>
+    </div>
+    <div class="col-md-12">
+        <label class="form-label">核心卖点</label>
+        <textarea name="selling_points" class="form-input" rows="2">{{ product.selling_points|default:'' }}</textarea>
+    </div>
+    <div class="col-md-12">
+        <label class="form-label">原料优势</label>
+        <textarea name="material_advantage" class="form-input" rows="2">{{ product.material_advantage|default:'' }}</textarea>
+    </div>
+    <div class="col-md-12">
+        <label class="form-label">立项依据</label>
+        <textarea name="project_rationale" class="form-input" rows="2">{{ product.project_rationale|default:'' }}</textarea>
+    </div>
+</div>

@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}归档{% endblock %}
+{% block content %}
+<div class="kanban-header">
+    <h2>归档</h2>
+</div>
+
+{% if draft_products %}
+<div class="archive-section">
+    <h4><i class="bi bi-pencil-square" style="color:var(--color-warning);"></i> 草稿箱</h4>
+    <div class="archive-grid">
+        {% for p in draft_products %}
+        <a href="{% url 'product_detail' p.id %}" class="archive-card">
+            <strong>{{ p.name }}</strong>
+            <span style="font-size:12px;color:var(--color-gray-400);">
+                {% if p.assignee %}{{ p.assignee.first_name|default:p.assignee.username }}{% endif %}
+            </span>
+            <span class="status-badge pending">草稿</span>
+            {% if p.can_delete %}
+            <button type="button" class="archive-delete-btn" title="彻底删除"
+                    onclick="event.preventDefault();event.stopPropagation();deleteArchivedProduct({{ p.id }}, '{{ p.name|escapejs }}', this)">
+                <i class="bi bi-trash"></i>
+            </button>
+            {% endif %}
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{% if completed_products %}
+<div class="archive-section">
+    <div style="display:flex;align-items:center;justify-content:space-between;">
+        <h4><i class="bi bi-check2-circle" style="color:var(--color-success);"></i> 已完成</h4>
+        <a href="{% url 'export_csv' %}?status=completed" class="btn btn-outline btn-sm">
+            <i class="bi bi-download"></i> 导出 CSV
+        </a>
+    </div>
+    <div class="archive-grid">
+        {% for p in completed_products %}
+        <a href="{% url 'product_detail' p.id %}" class="archive-card">
+            <strong>{{ p.name }}</strong>
+            <span class="status-icon done"><i class="bi bi-check-circle-fill"></i></span>
+            {% if p.can_delete %}
+            <button type="button" class="archive-delete-btn" title="彻底删除"
+                    onclick="event.preventDefault();event.stopPropagation();deleteArchivedProduct({{ p.id }}, '{{ p.name|escapejs }}', this)">
+                <i class="bi bi-trash"></i>
+            </button>
+            {% endif %}
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{% if cancelled_products %}
+<div class="archive-section">
+    <div style="display:flex;align-items:center;justify-content:space-between;">
+        <h4><i class="bi bi-x-circle" style="color:var(--color-gray-400);"></i> 已取消</h4>
+        <a href="{% url 'export_csv' %}?status=cancelled" class="btn btn-outline btn-sm">
+            <i class="bi bi-download"></i> 导出 CSV
+        </a>
+    </div>
+    <div class="archive-grid">
+        {% for p in cancelled_products %}
+        <a href="{% url 'product_detail' p.id %}" class="archive-card">
+            <strong>{{ p.name }}</strong>
+            <span class="status-icon cancelled"><i class="bi bi-x-circle-fill"></i></span>
+            {% if p.can_delete %}
+            <button type="button" class="archive-delete-btn" title="彻底删除"
+                    onclick="event.preventDefault();event.stopPropagation();deleteArchivedProduct({{ p.id }}, '{{ p.name|escapejs }}', this)">
+                <i class="bi bi-trash"></i>
+            </button>
+            {% endif %}
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{% if not draft_products and not completed_products and not cancelled_products %}
+<div class="empty-state">
+    <i class="bi bi-archive"></i>
+    <p>暂无归档记录</p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+{% load static %}
+<script src="{% static 'js/app.js' %}"></script>
+{% endblock %}

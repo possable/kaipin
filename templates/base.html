@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}开品项目管理系统{% endblock %}</title>
+    {% load static %}
+    <link rel="stylesheet" href="{% static 'bootstrap.min.css' %}">
+    <link rel="stylesheet" href="{% static 'fonts/bootstrap-icons.css' %}">
+    <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20260824-roadmap17">
+</head>
+<body>
+{% if user.is_authenticated %}
+<div class="app-layout">
+    <!-- 侧边栏 -->
+    <aside class="sidebar">
+        <div class="sidebar-brand">
+            <i class="bi bi-box-seam"></i>
+            <span>产品管理</span>
+        </div>
+        <nav class="sidebar-nav">
+            <a href="{% url 'kanban' %}" class="sidebar-item {% if request.resolver_match.url_name == 'kanban' %}active{% endif %}">
+                <i class="bi bi-kanban"></i>
+                <span>进度看板</span>
+            </a>
+            {% if user.profile.department.name == '产品部' or user.profile.is_admin %}
+            <div class="sidebar-section-label">管理</div>
+            <a href="{% url 'product_create' %}" class="sidebar-item {% if request.resolver_match.url_name == 'product_create' %}active{% endif %}">
+                <i class="bi bi-plus-circle"></i>
+                <span>创建新品</span>
+            </a>
+            {% endif %}
+            {% if user.profile.is_admin %}
+            <a href="{% url 'stage_template_list' %}" class="sidebar-item {% if 'stage_template' in request.resolver_match.url_name or 'task_template' in request.resolver_match.url_name %}active{% endif %}">
+                <i class="bi bi-gear"></i>
+                <span>流程模板</span>
+            </a>
+            <a href="{% url 'user_list' %}" class="sidebar-item {% if request.resolver_match.url_name == 'user_list' %}active{% endif %}">
+                <i class="bi bi-people"></i>
+                <span>用户管理</span>
+            </a>
+            <a href="{% url 'announcement_list' %}" class="sidebar-item {% if 'announcement' in request.resolver_match.url_name %}active{% endif %}">
+                <i class="bi bi-megaphone"></i>
+                <span>系统公告</span>
+            </a>
+            <div class="sidebar-section-label">日志</div>
+            <a href="{% url 'activity_list' %}" class="sidebar-item {% if request.resolver_match.url_name == 'activity_list' %}active{% endif %}">
+                <i class="bi bi-clock-history"></i>
+                <span>操作日志</span>
+            </a>
+            {% endif %}
+            {% if user.has_usable_password %}
+            <div class="sidebar-section-label">账号</div>
+            <a href="{% url 'change_password' %}" class="sidebar-item {% if request.resolver_match.url_name == 'change_password' %}active{% endif %}">
+                <i class="bi bi-key"></i>
+                <span>修改密码</span>
+            </a>
+            {% endif %}
+        </nav>
+        <div class="sidebar-footer">
+            <div class="user-info">
+                <div class="user-avatar">{{ user.username|slice:":1"|upper }}</div>
+                <div class="user-detail">
+                    <div class="user-name">{{ user.username }}</div>
+                    <div class="user-dept">{{ user.profile.department.name|default:'未分配' }}</div>
+                </div>
+            </div>
+            {% if user.profile.is_admin %}
+            <span class="badge-admin">管理员</span>
+            {% endif %}
+            {% if user.has_usable_password %}
+            <a href="{% url 'change_password' %}" class="btn-logout" title="修改密码">
+                <i class="bi bi-key"></i>
+            </a>
+            {% endif %}
+            <form method="post" action="{% url 'logout' %}" class="logout-form">
+                {% csrf_token %}
+                <button type="submit" class="btn-logout" title="退出登录">
+                    <i class="bi bi-box-arrow-right"></i>
+                </button>
+            </form>
+        </div>
+    </aside>
+
+    <!-- 主内容区 -->
+    <main class="main-content">
+        {% if messages %}
+            {% for message in messages %}
+                <div class="toast-message toast-{{ message.tags }}" onclick="this.remove()">
+                    <i class="bi bi-{% if message.tags == 'success' %}check-circle{% elif message.tags == 'error' %}x-circle{% elif message.tags == 'warning' %}exclamation-triangle{% else %}info-circle{% endif %}"></i>
+                    {{ message }}
+                </div>
+            {% endfor %}
+        {% endif %}
+        {% block content %}{% endblock %}
+    </main>
+</div>
+
+<!-- 发送企业微信消息弹窗 -->
+<div id="message-modal-overlay" class="modal-overlay" style="display:none;" onclick="closeMessageModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <span>给 <strong id="message-modal-target-name"></strong> 发消息</span>
+            <button type="button" class="modal-close-btn" onclick="closeMessageModal(event)">
+                <i class="bi bi-x-lg"></i>
+            </button>
+        </div>
+        <div class="modal-body">
+            <textarea id="message-modal-content" class="form-input" rows="4" placeholder="输入要发送的内容，将通过企业微信发送给对方..."></textarea>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-outline btn-sm" onclick="closeMessageModal(event)">取消</button>
+            <button type="button" class="btn btn-primary btn-sm" id="message-modal-send-btn" onclick="sendPersonMessage()">
+                <i class="bi bi-send"></i> 发送
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- 异常/卡点原因弹窗（看板点击异常图标时打开） -->
+<div id="alert-modal-overlay" class="modal-overlay" style="display:none;" onclick="closeAlertModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <span id="alert-modal-title"></span>
+            <button type="button" class="modal-close-btn" onclick="closeAlertModal(event)">
+                <i class="bi bi-x-lg"></i>
+            </button>
+        </div>
+        <div class="modal-body" id="alert-modal-content"></div>
+    </div>
+</div>
+
+<!-- 品信息弹窗（看板点击品名时打开） -->
+<div id="product-modal-overlay" class="modal-overlay" style="display:none;" onclick="closeProductModal(event)">
+    <div class="modal-box stage-modal-box" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <span id="product-modal-title"></span>
+            <button type="button" class="modal-close-btn" onclick="closeProductModal(event)">
+                <i class="bi bi-x-lg"></i>
+            </button>
+        </div>
+        <div class="modal-body" id="product-modal-content">
+            <div class="stage-modal-loading"><i class="bi bi-hourglass-split"></i> 加载中...</div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-outline btn-sm" onclick="closeProductModal(event)">关闭</button>
+            <button type="button" class="btn btn-primary btn-sm btn-save-reload" onclick="saveAndReload(this)">
+                <i class="bi bi-check-lg"></i> 保存并刷新
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- 阶段详情弹窗（看板点击某阶段时打开） -->
+<div id="stage-modal-overlay" class="modal-overlay" style="display:none;" onclick="closeStageModal(event)">
+    <div class="modal-box stage-modal-box" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <span id="stage-modal-title"></span>
+            <button type="button" class="modal-close-btn" onclick="closeStageModal(event)">
+                <i class="bi bi-x-lg"></i>
+            </button>
+        </div>
+        <div class="modal-body" id="stage-modal-content">
+            <div class="stage-modal-loading"><i class="bi bi-hourglass-split"></i> 加载中...</div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-outline btn-sm" onclick="closeStageModal(event)">关闭</button>
+            <button type="button" class="btn btn-primary btn-sm btn-save-reload" onclick="saveAndReload(this)">
+                <i class="bi bi-check-lg"></i> 保存并刷新
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- 任务清单弹窗（阶段弹窗内点击任务时打开，专注于填写最小事项信息） -->
+<div id="checklist-modal-overlay" class="modal-overlay" style="display:none;" onclick="closeChecklistModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()" style="width:600px;max-width:92vw;max-height:80vh;display:flex;flex-direction:column;">
+        <div class="modal-header">
+            <span id="checklist-modal-title"></span>
+            <button type="button" class="modal-close-btn" onclick="closeChecklistModal(event)">
+                <i class="bi bi-x-lg"></i>
+            </button>
+        </div>
+        <div class="modal-body" id="checklist-modal-content" style="overflow-y:auto;flex:1;">
+            <div class="stage-modal-loading"><i class="bi bi-hourglass-split"></i> 加载中...</div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-outline btn-sm" onclick="closeChecklistModal(event)">关闭</button>
+            <button type="button" class="btn btn-primary btn-sm btn-save-reload" onclick="saveAndReload(this)">
+                <i class="bi bi-check-lg"></i> 保存并刷新
+            </button>
+        </div>
+    </div>
+</div>
+<datalist id="modal-users-datalist">
+    {% for u in all_users %}
+    <option value="{{ u.first_name|default:u.username }}" data-id="{{ u.id }}">
+    {% endfor %}
+</datalist>
+{% else %}
+    {% block auth_content %}{% endblock %}
+{% endif %}
+
+<script src="{% static 'bootstrap.bundle.min.js' %}"></script>
+{% block extra_js %}{% endblock %}
+</body>
+</html>

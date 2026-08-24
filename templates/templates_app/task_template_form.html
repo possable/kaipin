@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}{{ action }}子任务模板{% endblock %}
+{% block content %}
+<div class="page-card">
+    <h2 class="page-title">{{ stage.name }} · {{ action }}子任务模板</h2>
+    {% if action == '删除确认' %}
+    <form method="post">
+        {% csrf_token %}
+        <p>确定要删除子任务 <strong>"{{ task.name }}"</strong> 吗？此操作不可恢复。</p>
+        <div style="display:flex;gap:8px;margin-top:20px;">
+            <button type="submit" class="btn btn-danger">
+                <i class="bi bi-trash"></i> 确认删除
+            </button>
+            <a href="{% url 'task_template_list' stage.pk %}" class="btn btn-outline">取消</a>
+        </div>
+    </form>
+    {% else %}
+    <form method="post">
+        {% csrf_token %}
+        <div class="form-group">
+            <label class="form-label">任务名称</label>
+            <input type="text" name="name" class="form-input" required
+                   value="{{ task.name|default:'' }}" placeholder="如：内部评审">
+        </div>
+        <div class="form-group">
+            <label class="form-label">排序</label>
+            <input type="number" name="order" class="form-input"
+                   value="{{ task.order|default:'0' }}" placeholder="0">
+        </div>
+        <div class="form-group">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                <input type="checkbox" name="is_milestone"
+                       {% if task.is_milestone %}checked{% endif %}
+                       style="width:16px;height:16px;cursor:pointer;">
+                <i class="bi bi-flag-fill" style="color:#ffd700;"></i>
+                <span>标记为里程碑（关键节点）</span>
+            </label>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:20px;">
+            <button type="submit" class="btn btn-primary">
+                <i class="bi bi-check-lg"></i> 保存
+            </button>
+            <a href="{% url 'task_template_list' stage.pk %}" class="btn btn-outline">取消</a>
+        </div>
+    </form>
+    {% endif %}
+</div>
+{% endblock %}

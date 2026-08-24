@@ -1,0 +1,23 @@
+# 开品项目管理系统 - systemd 服务
+# 放到 /etc/systemd/system/kaipin.service
+
+[Unit]
+Description=Kaipin Django App
+After=network.target mysql.service
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/kaipin
+EnvironmentFile=/opt/kaipin/.env
+ExecStart=/opt/kaipin/venv/bin/gunicorn kaipin.wsgi:application \
+    --bind 127.0.0.1:8000 \
+    --workers 3 \
+    --timeout 120 \
+    --access-logfile /var/log/kaipin/access.log \
+    --error-logfile /var/log/kaipin/error.log
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

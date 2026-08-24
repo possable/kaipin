@@ -1,0 +1,20 @@
+{# 产品资料只读展示（无编辑权限的用户查看）#}
+<div class="row g-3">
+    <div class="col-md-6"><label class="form-label" style="font-size:12px;">产品名称</label><div class="profile-view-value">{{ product.product_name|default:'--' }}</div></div>
+    <div class="col-md-6"><label class="form-label" style="font-size:12px;">品牌</label><div class="profile-view-value">{{ product.brand|default:'--' }}</div></div>
+    <div class="col-md-6"><label class="form-label" style="font-size:12px;">上架平台</label><div class="profile-view-value">{{ product.platforms|default:'--' }}</div></div>
+    <div class="col-md-6"><label class="form-label" style="font-size:12px;">所属类目</label><div class="profile-view-value">{{ product.category|default:'--' }}</div></div>
+    <div class="col-md-6"><label class="form-label" style="font-size:12px;">产品定位</label><div class="profile-view-value">{{ product.positioning|default:'--' }}</div></div>
+    <div class="col-md-6"><label class="form-label" style="font-size:12px;">剂型</label><div class="profile-view-value">{{ product.dosage_form|default:'--' }}</div></div>
+    <div class="col-md-6"><label class="form-label" style="font-size:12px;">规格</label><div class="profile-view-value">{{ product.specification|default:'--' }}</div></div>
+    <div class="col-md-6"><label class="form-label" style="font-size:12px;">目标人群</label><div class="profile-view-value">{{ product.target_audience|default:'--' }}</div></div>
+    <div class="col-md-6"><label class="form-label" style="font-size:12px;">场景应用</label><div class="profile-view-value">{{ product.usage_scenario|default:'--' }}</div></div>
+    <div class="col-md-4"><label class="form-label" style="font-size:12px;">建议零售价</label><div class="profile-view-value">{{ product.suggested_retail_price|default:'--' }}</div></div>
+    <div class="col-md-4"><label class="form-label" style="font-size:12px;">建议成本价</label><div class="profile-view-value">{{ product.suggested_cost_price|default:'--' }}</div></div>
+    <div class="col-md-4"><label class="form-label" style="font-size:12px;">预期毛利率(%)</label><div class="profile-view-value">{{ product.expected_gross_margin|default:'--' }}</div></div>
+    <div class="col-md-12"><label class="form-label" style="font-size:12px;">主要成分及含量</label><div class="profile-view-value">{{ product.main_ingredients|default:'--'|linebreaksbr }}</div></div>
+    <div class="col-md-12"><label class="form-label" style="font-size:12px;">功效描述</label><div class="profile-view-value">{{ product.efficacy|default:'--'|linebreaksbr }}</div></div>
+    <div class="col-md-12"><label class="form-label" style="font-size:12px;">核心卖点</label><div class="profile-view-value">{{ product.selling_points|default:'--'|linebreaksbr }}</div></div>
+    <div class="col-md-12"><label class="form-label" style="font-size:12px;">原料优势</label><div class="profile-view-value">{{ product.material_advantage|default:'--'|linebreaksbr }}</div></div>
+    <div class="col-md-12"><label class="form-label" style="font-size:12px;">立项依据</label><div class="profile-view-value">{{ product.project_rationale|default:'--'|linebreaksbr }}</div></div>
+</div>

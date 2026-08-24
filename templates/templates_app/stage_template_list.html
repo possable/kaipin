@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}流程模板管理{% endblock %}
+{% block content %}
+<div class="toolbar">
+    <h2 class="toolbar-title">流程模板管理</h2>
+    <a href="{% url 'stage_template_create' %}" class="btn btn-primary">
+        <i class="bi bi-plus-lg"></i> 添加阶段
+    </a>
+</div>
+
+<div class="alert alert-info" style="font-size:13px;padding:10px 16px;margin-bottom:16px;border-radius:var(--radius-sm);">
+    <i class="bi bi-info-circle"></i>
+    修改阶段模板只对<strong>之后新建的品</strong>生效，已在进行中的品不受影响。
+</div>
+
+<table class="data-table">
+    <thead>
+        <tr><th>顺序</th><th>阶段名称</th><th>负责部门</th><th>默认负责人</th><th>并行</th><th>子任务</th><th>操作</th></tr>
+    </thead>
+    <tbody>
+        {% for stage in stages %}
+        <tr>
+            <td><span class="stage-order" style="display:inline-flex;">{{ stage.order }}</span></td>
+            <td><strong>{{ stage.name }}</strong></td>
+            <td>{{ stage.department.name }}</td>
+            <td>{% if stage.default_assignee %}{{ stage.default_assignee.first_name|default:stage.default_assignee.username }}{% else %}--{% endif %}</td>
+            <td>{% if stage.allow_parallel %}<span style="color:var(--color-primary);font-weight:600;">并行</span>{% else %}顺序{% endif %}</td>
+            <td>
+                <a href="{% url 'task_template_list' stage.pk %}" class="btn btn-outline btn-sm">
+                    <i class="bi bi-list-check"></i> {{ stage.task_templates.count }} 个子任务
+                </a>
+            </td>
+            <td>
+                <div style="display:flex;gap:4px;">
+                    <a href="{% url 'stage_template_edit' stage.pk %}" class="btn btn-outline btn-sm">
+                        <i class="bi bi-pencil"></i>
+                    </a>
+                    <a href="{% url 'stage_template_delete' stage.pk %}" class="btn btn-danger btn-sm">
+                        <i class="bi bi-trash"></i>
+                    </a>
+                </div>
+            </td>
+        </tr>
+        {% empty %}
+        <tr>
+            <td colspan="5">
+                <div class="empty-state">
+                    <i class="bi bi-layers"></i>
+                    <p>暂无阶段模板，点击右上角添加</p>
+                </div>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

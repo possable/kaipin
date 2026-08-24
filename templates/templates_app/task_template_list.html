@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}{{ stage.name }} - 子任务模板{% endblock %}
+{% block content %}
+<div class="toolbar">
+    <div style="display:flex;align-items:center;gap:12px;">
+        <a href="{% url 'stage_template_list' %}" class="breadcrumb-btn">
+            <i class="bi bi-arrow-left"></i> 返回阶段列表
+        </a>
+        <h2 class="toolbar-title">{{ stage.name }} · 子任务模板</h2>
+    </div>
+    <a href="{% url 'task_template_create' stage.pk %}" class="btn btn-primary">
+        <i class="bi bi-plus-lg"></i> 添加子任务
+    </a>
+</div>
+
+<table class="data-table">
+    <thead>
+        <tr><th style="width:60px;">顺序</th><th>任务名称</th><th style="width:220px;">操作</th></tr>
+    </thead>
+    <tbody>
+        {% for task in tasks %}
+        <tr>
+            <td><span class="stage-order" style="display:inline-flex;width:26px;height:26px;font-size:12px;">{{ task.order }}</span></td>
+            <td>
+                {% if task.is_milestone %}<i class="bi bi-flag-fill" style="color:#ffd700;" title="里程碑"></i> {% endif %}
+                <strong>{{ task.name }}</strong>
+            </td>
+            <td>
+                <div style="display:flex;gap:4px;">
+                    <a href="{% url 'checklist_template_list' task.pk %}" class="btn btn-outline btn-sm">
+                        <i class="bi bi-list-check"></i> 最小事项（{{ task.checklist_item_templates.count }}）
+                    </a>
+                    <a href="{% url 'task_template_edit' task.pk %}" class="btn btn-outline btn-sm">
+                        <i class="bi bi-pencil"></i>
+                    </a>
+                    <a href="{% url 'task_template_delete' task.pk %}" class="btn btn-danger btn-sm">
+                        <i class="bi bi-trash"></i>
+                    </a>
+                </div>
+            </td>
+        </tr>
+        {% empty %}
+        <tr>
+            <td colspan="3">
+                <div class="empty-state">
+                    <i class="bi bi-list-check"></i>
+                    <p>暂无子任务，点击右上角添加</p>
+                </div>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

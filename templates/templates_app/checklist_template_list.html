@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}{{ task.name }} - 最小事项模板{% endblock %}
+{% block content %}
+<div class="toolbar">
+    <div style="display:flex;align-items:center;gap:12px;">
+        <a href="{% url 'task_template_list' stage.pk %}" class="breadcrumb-btn">
+            <i class="bi bi-arrow-left"></i> 返回子任务列表
+        </a>
+        <h2 class="toolbar-title">{{ stage.name }} · {{ task.name }} · 最小事项模板</h2>
+    </div>
+    <a href="{% url 'checklist_template_create' task.pk %}" class="btn btn-primary">
+        <i class="bi bi-plus-lg"></i> 添加最小事项
+    </a>
+</div>
+
+<table class="data-table">
+    <thead>
+        <tr><th style="width:60px;">顺序</th><th>事项名称</th><th style="width:120px;">操作</th></tr>
+    </thead>
+    <tbody>
+        {% for item in items %}
+        <tr>
+            <td><span class="stage-order" style="display:inline-flex;width:26px;height:26px;font-size:12px;">{{ item.order }}</span></td>
+            <td>
+                <strong>{{ item.name }}</strong>
+            </td>
+            <td>
+                <div style="display:flex;gap:4px;">
+                    <a href="{% url 'checklist_template_edit' item.pk %}" class="btn btn-outline btn-sm">
+                        <i class="bi bi-pencil"></i>
+                    </a>
+                    <a href="{% url 'checklist_template_delete' item.pk %}" class="btn btn-danger btn-sm">
+                        <i class="bi bi-trash"></i>
+                    </a>
+                </div>
+            </td>
+        </tr>
+        {% empty %}
+        <tr>
+            <td colspan="3">
+                <div class="empty-state">
+                    <i class="bi bi-list-check"></i>
+                    <p>暂无最小事项，点击右上角添加</p>
+                </div>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

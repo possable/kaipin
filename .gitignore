@@ -1,0 +1,40 @@
+# Environment variables and local secrets
+.env
+.env.*
+!.env.example
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+.venv-win/
+venv/
+env/
+
+# Django local/generated data
+*.sqlite3
+db.sqlite3
+*.sql
+media/
+staticfiles/
+
+# Runtime files
+*.log
+*.pid
+
+# Editors and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local design reference image
+/企业微信截图_17872950606378.png

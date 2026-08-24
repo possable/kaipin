@@ -1,0 +1,82 @@
+{# 项目基本信息 + 产品资料。product_detail.html 页面内嵌套使用，也被信息弹窗直接渲染。#}
+<input type="hidden" data-can-edit="{% if can_manage %}true{% else %}false{% endif %}">
+{% if product.status == 'draft' and can_manage %}
+<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+    <button type="button" class="btn btn-primary btn-sm" onclick="publishProduct({{ product.pk }})">
+        <i class="bi bi-send"></i> 发布项目
+    </button>
+</div>
+{% endif %}
+{% if product.status == 'active' and can_manage %}
+<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+    <button type="button" class="btn btn-danger btn-sm" onclick="cancelProduct({{ product.pk }})">
+        <i class="bi bi-x-circle"></i> 取消该品
+    </button>
+</div>
+{% endif %}
+<div class="page-card" style="max-width:100%;margin-bottom:24px;padding:18px 24px;">
+    <div class="row g-3 align-items-end">
+        <div class="col-md-3">
+            <label class="form-label" style="font-size:12px;">负责人</label>
+            <div style="display:flex;gap:4px;align-items:center;">
+                <input type="text" class="form-input user-search" list="{{ datalist_id|default:'users-datalist' }}" data-field="assignee" data-pk="{{ product.pk }}"
+                       placeholder="搜索负责人..." autocomplete="off" style="font-size:13px;"
+                       value="{% if product.assignee %}{{ product.assignee.first_name|default:product.assignee.username }}{% endif %}"
+                       data-userid="{% if product.assignee %}{{ product.assignee_id }}{% endif %}">
+                {% if product.assignee and product.assignee != user and can_manage %}
+                <button type="button" class="person-msg-btn" title="发消息"
+                        onclick="openMessageModal(event, 'product', {{ product.pk }}, '{{ product.assignee.first_name|default:product.assignee.username|escapejs }}')">
+                    <i class="bi bi-chat-dots"></i>
+                </button>
+                {% endif %}
+            </div>
+            {% if not hide_datalist %}
+            <datalist id="users-datalist">
+                {% for u in all_users %}
+                <option value="{{ u.first_name|default:u.username }}" data-id="{{ u.id }}">
+                {% endfor %}
+            </datalist>
+            {% endif %}
+        </div>
+        <div class="col-md-2">
+            <label class="form-label" style="font-size:12px;">开始时间</label>
+            <input type="date" class="form-input product-field" data-field="started_at" data-pk="{{ product.pk }}"
+                   value="{{ product.started_at|date:'Y-m-d' }}" style="font-size:13px;">
+        </div>
+        <div class="col-md-2">
+            <label class="form-label" style="font-size:12px;">预计结束</label>
+            <input type="date" class="form-input product-field" data-field="expected_end_date" data-pk="{{ product.pk }}"
+                   value="{{ product.expected_end_date|date:'Y-m-d' }}" style="font-size:13px;">
+        </div>
+        <div class="col-md-2">
+            <label class="form-label" style="font-size:12px;">实际结束</label>
+            <span class="form-input" style="display:block;font-size:13px;padding:9px 13px;border-radius:8px;border:1px solid var(--line2);background:#06131d;">
+                {{ product.actual_end_date|date:'Y-m-d'|default:'--' }}
+            </span>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label" style="font-size:12px;">创建时间</label>
+            <span class="form-input" style="display:block;font-size:13px;padding:9px 13px;border-radius:8px;border:1px solid var(--line2);background:#06131d;">
+                {{ product.created_at|date:'Y-m-d' }}
+            </span>
+        </div>
+    </div>
+</div>
+
+<!-- 产品资料 -->
+<div class="page-card" style="max-width:100%;margin-bottom:0;padding:18px 24px;">
+    <label class="form-label" style="font-size:13px;margin-bottom:12px;">产品资料</label>
+    {% if can_manage %}
+    <form class="product-profile-form" data-pk="{{ product.pk }}" onsubmit="return saveProductProfile(event, this)">
+        {% csrf_token %}
+        {% include 'products/_product_profile_fields.html' %}
+        <div style="margin-top:16px;">
+            <button type="submit" class="btn btn-primary btn-sm">
+                <i class="bi bi-check-lg"></i> 保存产品资料
+            </button>
+        </div>
+    </form>
+    {% else %}
+    {% include 'products/_product_profile_fields_readonly.html' %}
+    {% endif %}
+</div>

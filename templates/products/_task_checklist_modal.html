@@ -1,0 +1,16 @@
+{% load static %}
+<input type="hidden" data-can-edit="{% if task.can_edit %}true{% else %}false{% endif %}">
+<div class="checklist-box">
+    <div class="row g-3">
+        {% for item in task.checklist_items.all %}
+        <div class="col-md-6 checklist-grid-item" data-item-id="{{ item.pk }}">
+            <label class="form-label">{{ item.name }}</label>
+            {% if task.can_edit %}
+            <input type="text" class="form-input checklist-notes-field" name="notes_{{ item.pk }}" data-item-id="{{ item.pk }}" placeholder="填写内容..." style="font-size:12px;" value="{{ item.notes }}">
+            {% elif item.notes %}
+            <div style="font-size:12px;color:var(--color-gray-600);">{{ item.notes }}</div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>

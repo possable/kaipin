@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}{{ action }}公告{% endblock %}
+{% block content %}
+<div class="page-card">
+    <h2 class="page-title">{{ action }}公告</h2>
+    <form method="post">
+        {% csrf_token %}
+        <div class="form-group">
+            <label class="form-label">标题</label>
+            <input type="text" name="title" class="form-input" required maxlength="100"
+                   value="{{ announcement.title|default:'' }}" placeholder="如：系统将于本周六升级维护">
+        </div>
+        <div class="form-group">
+            <label class="form-label">内容</label>
+            <textarea name="content" class="form-input" rows="6" required
+                      placeholder="公告详细内容...">{{ announcement.content|default:'' }}</textarea>
+        </div>
+        <div class="form-group">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px;">
+                <input type="checkbox" name="is_pinned"
+                    {% if announcement and announcement.is_pinned %}checked{% endif %}
+                    style="width:18px;height:18px;">
+                置顶（优先显示在公告列表最前）
+            </label>
+        </div>
+        <div class="form-group">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px;">
+                <input type="checkbox" name="is_active"
+                    {% if not announcement or announcement.is_active %}checked{% endif %}
+                    style="width:18px;height:18px;">
+                生效（取消勾选后不再展示，但保留记录）
+            </label>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:20px;">
+            <button type="submit" class="btn btn-primary">
+                <i class="bi bi-check-lg"></i> 保存
+            </button>
+            <a href="{% url 'announcement_list' %}" class="btn btn-outline">取消</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}创建新品{% endblock %}
+{% block content %}
+<div class="page-card" style="max-width:920px;">
+    <h2 class="page-title">创建新品</h2>
+    {% if has_templates %}
+    <form method="post" id="create-form">
+        {% csrf_token %}
+        <div class="form-group">
+            <label class="form-label">品名 <span style="color:var(--red);">*</span></label>
+            <input type="text" name="name" class="form-input"
+                   placeholder="输入新品名称，如：维C泡腾片2026款" required autofocus
+                   value="{{ form_name|default:'' }}">
+        </div>
+        <div class="form-group">
+            <label class="form-label">总负责人 <span style="color:var(--red);">*</span></label>
+            <input type="text" class="form-input user-search" list="users-datalist" id="assignee-search"
+                   placeholder="搜索总负责人..." autocomplete="off" required>
+            <input type="hidden" name="assignee" id="assignee-id" value="{{ form_assignee_id|default:'' }}">
+            <datalist id="users-datalist">
+                {% for u in all_users %}
+                <option value="{{ u.first_name|default:u.username }}" data-id="{{ u.id }}">
+                {% endfor %}
+            </datalist>
+        </div>
+        <div class="row g-3">
+            <div class="col-md-6">
+                <div class="form-group">
+                    <label class="form-label">项目开始时间 <span style="color:var(--red);">*</span></label>
+                    <input type="date" name="started_at" id="form-started-at" class="form-input" required
+                           value="{{ form_started_at|default:'' }}">
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="form-group">
+                    <label class="form-label">项目预计结束时间 <span style="color:var(--red);">*</span></label>
+                    <input type="date" name="expected_end_date" id="form-expected-end" class="form-input" required
+                           value="{{ form_expected_end_date|default:'' }}">
+                </div>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">产品资料（选填，可创建后再补充）</label>
+        </div>
+        {% include 'products/_product_profile_fields.html' %}
+
+        <div class="form-group">
+            <small class="text-muted">创建后进入草稿箱，由总负责人编辑完善后发布正式开始。</small>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:20px;">
+            <button type="submit" class="btn btn-primary">
+                <i class="bi bi-check-lg"></i> 创建草稿
+            </button>
+            <a href="{% url 'kanban' %}" class="btn btn-outline">取消</a>
+        </div>
+    </form>
+    <script>
+    document.querySelector('.user-search').addEventListener('input', function(){
+        const opts = document.querySelectorAll('#users-datalist option');
+        const hidden = document.getElementById('assignee-id');
+        opts.forEach(o => { if(o.value === this.value) hidden.value = o.dataset.id; });
+    });
+    </script>
+    {% else %}
+    <div class="alert alert-warning">
+        <i class="bi bi-exclamation-triangle"></i>
+        尚未配置阶段模板，请先 <a href="{% url 'stage_template_list' %}">配置流程模板</a>。
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
