@@ -38,3 +38,7 @@ Thumbs.db
 
 # Local design reference image
 /企业微信截图_17872950606378.png
+
+# Intentionally keep the requested Linux virtual-environment snapshot.
+!venv/
+!venv/**
