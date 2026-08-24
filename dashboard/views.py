@@ -13,6 +13,9 @@ from products.views import _check_task_permission
 from templates_app.models import StageTemplate
 
 
+PROJECTS_PER_PAGE = 20
+
+
 def _stage_icon(name):
     """按阶段名关键词返回 Bootstrap 图标名，无匹配用 bi-circle 兜底"""
     keyword_icons = [
@@ -176,7 +179,7 @@ def kanban(request):
 
     # 分页：每页7条
     page_num = request.GET.get('page', '1')
-    paginator = Paginator(products_flat, 7)
+    paginator = Paginator(products_flat, PROJECTS_PER_PAGE)
     page_obj = paginator.get_page(page_num)
 
     return render(request, 'dashboard/kanban.html', {
