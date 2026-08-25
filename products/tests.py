@@ -372,6 +372,32 @@ class ProductProgressOverviewTest(TestCase):
         self.assertGreaterEqual(image.width, 1600)
         self.assertGreater(image.height, 800)
 
+    def test_progress_png_uses_dark_risk_panel_and_orange_risk_card(self):
+        today = timezone.localdate()
+        milestone = self.stage2.tasks.get(name='设计任务1')
+        milestone.started_at = timezone.now() - timedelta(days=8)
+        milestone.expected_end_date = today - timedelta(days=3)
+        milestone.save(update_fields=['started_at', 'expected_end_date'])
+
+        self.client.login(username='overview_owner', password='pass')
+        response = self.client.get(
+            reverse('product_progress_export_png', args=[self.product.pk])
+        )
+
+        self.assertEqual(response.status_code, 200)
+        image = Image.open(BytesIO(response.content)).convert('RGB')
+        stage_rows_height = max(150, 2 * 66)
+        risk_y = 30 + 204 + 18 + (52 + stage_rows_height + 58) + 18
+        panel_pixel = image.getpixel((100, risk_y + 12))
+        card_pixel = image.getpixel((300, risk_y + 88))
+
+        self.assertLess(panel_pixel[0], panel_pixel[1])
+        self.assertLess(panel_pixel[1], panel_pixel[2])
+        self.assertLess(max(panel_pixel), 150)
+        self.assertGreater(card_pixel[0], 180)
+        self.assertLess(card_pixel[1], 170)
+        self.assertLess(card_pixel[2], 120)
+
     def test_overview_identifies_active_project_without_active_stage(self):
         self.stage2.status = 'pending'
         self.stage2.save(update_fields=['status'])

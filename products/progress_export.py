@@ -1,7 +1,7 @@
 from io import BytesIO
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageColor, ImageDraw, ImageFont
 
 
 BACKGROUND = '#06131d'
@@ -1536,6 +1536,15 @@ ROADMAP_STATUS = {
         'border': '#C8D0DA',
     },
 }
+ROADMAP_RISK_PANEL_TOP = '#123E59'
+ROADMAP_RISK_PANEL_BOTTOM = '#061F32'
+ROADMAP_RISK_PANEL_BORDER = '#2D82A3'
+ROADMAP_RISK_CARD_PALETTES = [
+    ('#FF8C3C', '#E74235'),
+    ('#F36F39', '#CA3038'),
+    ('#E94A36', '#A72938'),
+    ('#D82F38', '#762138'),
+]
 
 
 def _roadmap_palette(status_key):
@@ -1557,6 +1566,54 @@ def _draw_roadmap_card(draw, box, radius=12, outline=ROADMAP_LINE):
         outline=outline,
         width=1,
     )
+
+
+def _draw_rounded_gradient(
+    image,
+    draw,
+    box,
+    start_color,
+    end_color,
+    *,
+    radius=10,
+    outline=None,
+    outline_width=1,
+    horizontal=False,
+):
+    """Draw a clipped linear gradient with an optional rounded outline."""
+    x1, y1, x2, y2 = (int(round(value)) for value in box)
+    width = max(1, x2 - x1 + 1)
+    height = max(1, y2 - y1 + 1)
+    start_rgb = ImageColor.getrgb(start_color)
+    end_rgb = ImageColor.getrgb(end_color)
+    gradient = Image.new('RGB', (width, height), start_rgb)
+    gradient_draw = ImageDraw.Draw(gradient)
+    steps = width if horizontal else height
+    for position in range(steps):
+        ratio = position / max(1, steps - 1)
+        color = tuple(
+            round(start + (end - start) * ratio)
+            for start, end in zip(start_rgb, end_rgb)
+        )
+        if horizontal:
+            gradient_draw.line((position, 0, position, height), fill=color)
+        else:
+            gradient_draw.line((0, position, width, position), fill=color)
+
+    mask = Image.new('L', (width, height), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        (0, 0, width - 1, height - 1),
+        radius=radius,
+        fill=255,
+    )
+    image.paste(gradient, (x1, y1), mask)
+    if outline:
+        draw.rounded_rectangle(
+            (x1, y1, x2, y2),
+            radius=radius,
+            outline=outline,
+            width=outline_width,
+        )
 
 
 def _draw_roadmap_status_icon(draw, center, status_key, radius=7):
@@ -1590,15 +1647,30 @@ def _roadmap_risk_panel_height(risks):
     return 84 + rows * 72 + max(0, rows - 1) * 10 + 12
 
 
-def _draw_roadmap_risk_panel(draw, risks, box, fonts):
+def _draw_roadmap_risk_panel(image, draw, risks, box, fonts):
     x1, y1, x2, y2 = box
     has_risks = bool(risks)
-    outline = '#F0CACA' if has_risks else ROADMAP_LINE
-    _draw_roadmap_card(draw, box, radius=12, outline=outline)
-    if has_risks:
-        draw.rounded_rectangle((x1 + 1, y1 + 1, x2 - 1, y1 + 5), radius=3, fill='#FF7475')
+    draw.rounded_rectangle(
+        (x1 + 3, y1 + 5, x2 + 3, y2 + 5),
+        radius=12,
+        fill='#D7E0E8',
+    )
+    _draw_rounded_gradient(
+        image,
+        draw,
+        box,
+        ROADMAP_RISK_PANEL_TOP,
+        ROADMAP_RISK_PANEL_BOTTOM,
+        radius=12,
+        outline=ROADMAP_RISK_PANEL_BORDER,
+    )
+    draw.rounded_rectangle(
+        (x1 + 2, y1 + 2, x2 - 2, y1 + 5),
+        radius=3,
+        fill='#51B4D9' if has_risks else '#3AAE83',
+    )
 
-    kicker_color = ROADMAP_STATUS['overdue']['main'] if has_risks else ROADMAP_STATUS['completed']['main']
+    kicker_color = '#8FD8F1' if has_risks else '#82E6BA'
     heading_center_x = (x1 + x2) / 2
     kicker_text = 'MILESTONE RISK ALERT'
     kicker_width = _text_width(draw, kicker_text, fonts['eyebrow'])
@@ -1614,7 +1686,7 @@ def _draw_roadmap_risk_panel(draw, risks, box, fonts):
         (heading_center_x - risk_title_width / 2, y1 + 27),
         risk_title,
         font=fonts['section'],
-        fill=ROADMAP_TEXT,
+        fill='#F4FBFF',
     )
     risk_description = '仅汇总当前已延期的里程碑，按逾期天数从高到低排列'
     description_width = _text_width(draw, risk_description, fonts['small'])
@@ -1622,27 +1694,43 @@ def _draw_roadmap_risk_panel(draw, risks, box, fonts):
         (heading_center_x - description_width / 2, y1 + 50),
         risk_description,
         font=fonts['small'],
-        fill=ROADMAP_LABEL,
+        fill='#C2DFEB',
     )
 
     count_text = f'{len(risks)} 项风险'
-    count_width = _text_width(draw, count_text, fonts['small_bold']) + 24
+    count_width = _text_width(draw, count_text, fonts['risk_count']) + 24
     count_box = (x2 - count_width - 18, y1 + 22, x2 - 18, y1 + 52)
-    palette = ROADMAP_STATUS['overdue'] if has_risks else ROADMAP_STATUS['completed']
-    draw.rounded_rectangle(count_box, radius=14, fill=palette['soft'], outline=palette['border'], width=1)
-    _draw_centered_lines(draw, [count_text], count_box, fonts['small_bold'], palette['main'])
-    draw.line((x1 + 1, y1 + 70, x2 - 1, y1 + 70), fill=ROADMAP_LINE, width=1)
+    count_start, count_end = ('#FF8F3D', '#E63F35') if has_risks else ('#218D68', '#17664F')
+    count_outline = '#FFD0AC' if has_risks else '#A0EFCA'
+    _draw_rounded_gradient(
+        image,
+        draw,
+        count_box,
+        count_start,
+        count_end,
+        radius=14,
+        outline=count_outline,
+        horizontal=True,
+    )
+    _draw_centered_lines(
+        draw,
+        [count_text],
+        count_box,
+        fonts['risk_count'],
+        '#FFFAF4' if has_risks else '#EDFFF7',
+    )
+    draw.line((x1 + 1, y1 + 70, x2 - 1, y1 + 70), fill='#2F708D', width=1)
 
     if not risks:
         icon_x = (x1 + x2) / 2 - 126
         icon_y = y1 + 98
         _draw_roadmap_status_icon(draw, (icon_x, icon_y), 'completed', radius=9)
-        draw.text((icon_x + 18, y1 + 84), '暂无延期里程碑', font=fonts['body_bold'], fill='#28533D')
+        draw.text((icon_x + 18, y1 + 84), '暂无延期里程碑', font=fonts['risk_name'], fill='#ECFFF6')
         draw.text(
             (icon_x + 18, y1 + 104),
             '当前里程碑进度未发现延期风险',
             font=fonts['small'],
-            fill=ROADMAP_LABEL,
+            fill='#B8DDCF',
         )
         return
 
@@ -1660,21 +1748,25 @@ def _draw_roadmap_risk_panel(draw, risks, box, fonts):
         card_y1 = cards_y + row * (card_height + 10)
         card_x2 = card_x1 + card_width
         card_y2 = card_y1 + card_height
-        draw.rounded_rectangle(
+        card_start, card_end = ROADMAP_RISK_CARD_PALETTES[index % len(ROADMAP_RISK_CARD_PALETTES)]
+        _draw_rounded_gradient(
+            image,
+            draw,
             (card_x1, card_y1, card_x2, card_y2),
+            card_start,
+            card_end,
             radius=9,
-            fill='#FFFCFC',
-            outline='#F2D4D4',
-            width=1,
+            outline='#FFDAC0',
+            horizontal=True,
         )
         draw.rounded_rectangle(
             (card_x1 + 10, card_y1 + 18, card_x1 + 44, card_y1 + 52),
             radius=8,
-            fill=ROADMAP_STATUS['overdue']['soft'],
-            outline='#FFCACA',
+            fill='#A83A2E',
+            outline='#FFF0DF',
             width=1,
         )
-        draw.text((card_x1 + 21, card_y1 + 24), '!', font=fonts['body_bold'], fill=ROADMAP_STATUS['overdue']['main'])
+        draw.text((card_x1 + 21, card_y1 + 24), '!', font=fonts['body_bold'], fill='#FFFAF2')
 
         main_x = card_x1 + 56
         main_width = card_width * .43
@@ -1688,31 +1780,31 @@ def _draw_roadmap_risk_panel(draw, risks, box, fonts):
         name_text = _wrap_text(
             draw,
             risk['name'],
-            fonts['body_bold'],
+            fonts['risk_name'],
             max(80, main_width - 12),
             max_lines=1,
         )[0]
-        draw.text((main_x, card_y1 + 12), stage_text, font=fonts['small_bold'], fill=ROADMAP_LABEL)
-        draw.text((main_x, card_y1 + 38), name_text, font=fonts['body_bold'], fill=ROADMAP_TEXT)
+        draw.text((main_x, card_y1 + 12), stage_text, font=fonts['small_bold'], fill='#FFF0E2')
+        draw.text((main_x, card_y1 + 37), name_text, font=fonts['risk_name'], fill='#FFFFFF')
 
         meta_x = card_x1 + main_width + 54
         meta_width = (card_x2 - meta_x - 12) / 3
         meta = [
-            ('负责人', risk['assignee_name'], ROADMAP_TEXT),
-            ('预计结束', _format_date(risk['expected_end_date']), ROADMAP_TEXT),
-            ('已延期', f"{risk['overdue_days']} 天", ROADMAP_STATUS['overdue']['main']),
+            ('负责人', risk['assignee_name'], '#FFFDF8'),
+            ('预计结束', _format_date(risk['expected_end_date']), '#FFFDF8'),
+            ('已延期', f"{risk['overdue_days']} 天", '#FFF3B8'),
         ]
         for meta_index, (label, value, value_color) in enumerate(meta):
             item_x = meta_x + meta_index * meta_width
             value_text = _wrap_text(
                 draw,
                 value,
-                fonts['small_bold'],
+                fonts['risk_value'],
                 max(36, meta_width - 8),
                 max_lines=1,
             )[0]
-            draw.text((item_x, card_y1 + 13), label, font=fonts['tiny'], fill=ROADMAP_LABEL)
-            draw.text((item_x, card_y1 + 39), value_text, font=fonts['small_bold'], fill=value_color)
+            draw.text((item_x, card_y1 + 12), label, font=fonts['risk_label'], fill='#FFF0E2')
+            draw.text((item_x, card_y1 + 38), value_text, font=fonts['risk_value'], fill=value_color)
 
 
 def render_product_progress_png(product, overview):
@@ -1751,6 +1843,10 @@ def render_product_progress_png(product, overview):
         'small': _font(11),
         'small_bold': _font(11, bold=True),
         'tiny': _font(9),
+        'risk_name': _font(14, bold=True),
+        'risk_label': _font(11, bold=True),
+        'risk_value': _font(13, bold=True),
+        'risk_count': _font(12, bold=True),
     }
 
     summary_box = (margin, summary_y, width - margin, summary_y + summary_height)
@@ -2030,6 +2126,7 @@ def render_product_progress_png(product, overview):
         )
 
     _draw_roadmap_risk_panel(
+        image,
         draw,
         risks,
         (margin, risk_y, width - margin, risk_y + risk_height),

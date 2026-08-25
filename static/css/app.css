@@ -1635,7 +1635,7 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
     display: block;
     margin-bottom: 3px;
     color: #ff7777;
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 750;
     letter-spacing: 1.4px;
 }
@@ -1646,12 +1646,12 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
     gap: 7px;
     margin: 0;
     color: var(--text);
-    font-size: 17px;
+    font-size: 20px;
     font-weight: 720;
 }
-.project-risk-heading h4 > i { color: #ff6666; font-size: 16px; }
+.project-risk-heading h4 > i { color: #ff6666; font-size: 19px; }
 .project-risk-panel.is-clear .project-risk-heading h4 > i { color: #39d98a; }
-.project-risk-heading p { margin: 3px 0 0; color: #758a95; font-size: 10px; }
+.project-risk-heading p { margin: 3px 0 0; color: #758a95; font-size: 12px; }
 .project-risk-count {
     flex: 0 0 auto;
     display: inline-flex;
@@ -1662,7 +1662,7 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
     border-radius: 999px;
     background: rgba(255, 61, 67, .08);
     color: #ff8b8b;
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 700;
 }
 .project-risk-panel.is-clear .project-risk-count {
@@ -1709,24 +1709,24 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
 .project-risk-main > small {
     overflow: hidden;
     color: #788d98;
-    font-size: 9px;
+    font-size: 11px;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 .project-risk-main > strong {
     overflow: hidden;
     color: #edf6f2;
-    font-size: 12px;
+    font-size: 15px;
     font-weight: 680;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 .project-risk-meta { gap: 4px; }
-.project-risk-meta > small { color: #718690; font-size: 9px; }
+.project-risk-meta > small { color: #718690; font-size: 11px; }
 .project-risk-meta > strong {
     overflow: hidden;
     color: #c9d7d2;
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 620;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1743,8 +1743,8 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
 }
 .project-risk-empty > i { font-size: 22px; }
 .project-risk-empty > span { display: flex; flex-direction: column; gap: 3px; }
-.project-risk-empty strong { color: #cde9dc; font-size: 13px; }
-.project-risk-empty small { color: #718690; font-size: 10px; }
+.project-risk-empty strong { color: #cde9dc; font-size: 15px; }
+.project-risk-empty small { color: #718690; font-size: 12px; }
 
 @media (max-width: 1100px) {
     .project-risk-list { grid-template-columns: minmax(0, 1fr); }
@@ -2586,20 +2586,31 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
 #product-modal-overlay[data-modal-mode="progress"] .project-risk-panel {
     margin-top: 14px;
     overflow: hidden;
-    background: #fff;
+    border-color: #28789a;
+    background:
+        radial-gradient(circle at 50% -30%, rgba(61, 154, 191, .2), transparent 55%),
+        linear-gradient(180deg, #123c56 0%, #08283d 48%, #061f32 100%);
+    box-shadow:
+        inset 0 1px 0 rgba(148, 220, 245, .2),
+        0 8px 22px rgba(3, 22, 35, .2);
 }
 #product-modal-overlay[data-modal-mode="progress"] .project-risk-panel.has-risks {
-    border-color: #f0caca;
-    background: #fff;
-    box-shadow: 0 5px 18px rgba(40, 55, 78, .055), inset 0 3px 0 rgba(255, 77, 79, .78);
+    border-color: #2d82a3;
+    background:
+        radial-gradient(circle at 50% -35%, rgba(71, 169, 205, .22), transparent 56%),
+        linear-gradient(180deg, #123e59 0%, #092a40 48%, #061f32 100%);
+    box-shadow:
+        inset 0 2px 0 rgba(81, 180, 217, .42),
+        0 8px 24px rgba(3, 22, 35, .24);
 }
 #product-modal-overlay[data-modal-mode="progress"] .project-risk-header {
     position: relative;
     min-height: 76px;
     justify-content: center;
     padding: 13px 18px;
-    border-bottom: 1px solid var(--roadmap-line);
-    background: #fff;
+    border-bottom: 1px solid rgba(75, 166, 202, .42);
+    background: linear-gradient(180deg, rgba(20, 65, 91, .82), rgba(8, 40, 61, .7));
+    box-shadow: inset 0 -1px 0 rgba(2, 18, 29, .28);
 }
 #product-modal-overlay[data-modal-mode="progress"] .project-risk-heading {
     width: 100%;
@@ -2608,23 +2619,25 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
 }
 #product-modal-overlay[data-modal-mode="progress"] .project-risk-kicker {
     margin-bottom: 4px;
-    color: var(--roadmap-red);
+    color: #8fd8f1;
     font-size: 10px;
     letter-spacing: 1.7px;
 }
-#product-modal-overlay[data-modal-mode="progress"] .project-risk-panel.is-clear .project-risk-kicker { color: var(--roadmap-green); }
+#product-modal-overlay[data-modal-mode="progress"] .project-risk-panel.is-clear .project-risk-kicker { color: #82e6ba; }
 #product-modal-overlay[data-modal-mode="progress"] .project-risk-heading h4 {
     justify-content: center;
-    color: var(--roadmap-text);
+    color: #f4fbff;
     font-size: 18px;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, .38);
 }
-#product-modal-overlay[data-modal-mode="progress"] .project-risk-heading h4 > i { color: var(--roadmap-red); }
-#product-modal-overlay[data-modal-mode="progress"] .project-risk-panel.is-clear .project-risk-heading h4 > i { color: var(--roadmap-green); }
+#product-modal-overlay[data-modal-mode="progress"] .project-risk-heading h4 > i { color: #ffad62; }
+#product-modal-overlay[data-modal-mode="progress"] .project-risk-panel.is-clear .project-risk-heading h4 > i { color: #7ce1b0; }
 #product-modal-overlay[data-modal-mode="progress"] .project-risk-heading p {
     margin-top: 5px;
-    color: #111827;
+    color: #c2dfeb;
     font-weight: 650;
     font-size: 12px;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, .28);
 }
 #product-modal-overlay[data-modal-mode="progress"] .project-risk-count {
     position: absolute;
@@ -2633,67 +2646,94 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
     transform: translateY(-50%);
     min-height: 31px;
     padding: 5px 12px;
-    border-color: #ffc8c8;
-    background: var(--roadmap-red-soft);
-    color: var(--roadmap-red);
+    border-color: rgba(255, 208, 172, .78);
+    background: linear-gradient(135deg, #ff8f3d, #e63f35);
+    color: #fffaf4;
     font-size: 12px;
+    text-shadow: 0 1px 2px rgba(116, 25, 15, .45);
+    box-shadow: 0 3px 10px rgba(239, 76, 45, .3), inset 0 1px 0 rgba(255, 255, 255, .3);
 }
 #product-modal-overlay[data-modal-mode="progress"] .project-risk-panel.is-clear .project-risk-count {
-    border-color: #bfe8d2;
-    background: var(--roadmap-green-soft);
-    color: var(--roadmap-green);
+    border-color: rgba(160, 239, 202, .65);
+    background: linear-gradient(135deg, #218d68, #17664f);
+    color: #edfff7;
+    box-shadow: 0 3px 10px rgba(22, 112, 81, .28), inset 0 1px 0 rgba(255, 255, 255, .22);
 }
 #product-modal-overlay[data-modal-mode="progress"] .project-risk-list {
     gap: 10px;
     padding: 12px;
-    background: #fbfcfd;
+    background: rgba(2, 22, 35, .36);
 }
 #product-modal-overlay[data-modal-mode="progress"] .project-risk-item {
+    --risk-card-start: #ff8c3c;
+    --risk-card-end: #e74235;
     min-height: 66px;
     grid-template-columns: 36px minmax(150px, 1fr) minmax(78px, .2fr) minmax(104px, .27fr) minmax(72px, .17fr);
     gap: 12px;
     padding: 10px 12px;
-    border-color: #f2d4d4;
-    background: #fff;
-    color: var(--roadmap-text);
-    box-shadow: 0 2px 8px rgba(46, 60, 82, .045);
+    border-color: rgba(255, 218, 190, .78);
+    background: linear-gradient(135deg, var(--risk-card-start), var(--risk-card-end));
+    color: #fffaf6;
+    box-shadow:
+        0 3px 9px rgba(245, 76, 43, .28),
+        0 0 12px rgba(255, 135, 56, .14),
+        inset 0 1px 0 rgba(255, 255, 255, .28);
+    text-shadow: 0 1px 2px rgba(105, 25, 15, .42);
+}
+#product-modal-overlay[data-modal-mode="progress"] .project-risk-item:nth-child(4n + 2) {
+    --risk-card-start: #f36f39;
+    --risk-card-end: #ca3038;
+}
+#product-modal-overlay[data-modal-mode="progress"] .project-risk-item:nth-child(4n + 3) {
+    --risk-card-start: #e94a36;
+    --risk-card-end: #a72938;
+}
+#product-modal-overlay[data-modal-mode="progress"] .project-risk-item:nth-child(4n) {
+    --risk-card-start: #d82f38;
+    --risk-card-end: #762138;
 }
 #product-modal-overlay[data-modal-mode="progress"] .project-risk-item:hover {
-    border-color: #f3aaaa;
-    background: #fffafa;
+    border-color: #fff0dc;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--risk-card-start) 88%, white), color-mix(in srgb, var(--risk-card-end) 90%, white));
+    box-shadow:
+        0 5px 13px rgba(245, 76, 43, .36),
+        0 0 16px rgba(255, 137, 59, .22),
+        inset 0 1px 0 rgba(255, 255, 255, .38);
 }
 #product-modal-overlay[data-modal-mode="progress"] .project-risk-icon {
     width: 34px;
     height: 34px;
-    border-color: #ffcaca;
-    background: var(--roadmap-red-soft);
-    color: var(--roadmap-red);
+    border-color: rgba(255, 245, 232, .78);
+    background: rgba(128, 28, 24, .18);
+    color: #fffaf2;
     font-size: 14px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18);
 }
 #product-modal-overlay[data-modal-mode="progress"] .project-risk-main > small,
 #product-modal-overlay[data-modal-mode="progress"] .project-risk-meta > small {
-    color: #111827;
+    color: #fff0e2;
     font-weight: 650;
     font-size: 11px;
 }
 #product-modal-overlay[data-modal-mode="progress"] .project-risk-main > strong {
-    color: #0f172a;
+    color: #ffffff;
     font-size: 14px;
 }
 #product-modal-overlay[data-modal-mode="progress"] .project-risk-meta > strong {
-    color: #0f172a;
+    color: #fffdf8;
     font-size: 13px;
 }
-#product-modal-overlay[data-modal-mode="progress"] .project-risk-days > strong { color: var(--roadmap-red); }
+#product-modal-overlay[data-modal-mode="progress"] .project-risk-days > strong { color: #fff3b8; }
 #product-modal-overlay[data-modal-mode="progress"] .project-risk-empty {
     min-height: 82px;
-    background: #fbfdfc;
-    color: var(--roadmap-green);
+    background: rgba(3, 28, 40, .42);
+    color: #72e4b0;
 }
 #product-modal-overlay[data-modal-mode="progress"] .project-risk-empty strong {
-    color: #0f172a;
+    color: #ecfff6;
     font-size: 14px;
 }
+#product-modal-overlay[data-modal-mode="progress"] .project-risk-empty small { color: #b8ddcf; }
 #product-modal-overlay[data-modal-mode="progress"] .project-risk-empty small {
     color: #111827;
     font-weight: 650;
@@ -2815,7 +2855,7 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
         grid-template-rows:
             clamp(132px, 18vh, 168px)
             minmax(0, 1fr)
-            clamp(108px, 14vh, 148px);
+            clamp(124px, 16vh, 168px);
         gap: 8px;
         overflow: hidden;
         padding: 0;
@@ -2970,25 +3010,25 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
         margin-top: 0;
     }
     #product-modal-overlay[data-modal-mode="progress"] .project-risk-header {
-        min-height: 48px;
-        flex: 0 0 48px;
-        padding: 5px 12px;
+        min-height: 56px;
+        flex: 0 0 56px;
+        padding: 6px 14px;
     }
     #product-modal-overlay[data-modal-mode="progress"] .project-risk-kicker {
-        margin-bottom: 1px;
-        font-size: 8px;
+        margin-bottom: 2px;
+        font-size: 10px;
     }
     #product-modal-overlay[data-modal-mode="progress"] .project-risk-heading h4 {
-        font-size: 15px;
+        font-size: 18px;
     }
     #product-modal-overlay[data-modal-mode="progress"] .project-risk-heading p {
-        margin-top: 1px;
-        font-size: 9px;
+        margin-top: 2px;
+        font-size: 11px;
     }
     #product-modal-overlay[data-modal-mode="progress"] .project-risk-count {
-        min-height: 25px;
-        padding: 3px 9px;
-        font-size: 10px;
+        min-height: 29px;
+        padding: 4px 11px;
+        font-size: 12px;
     }
     #product-modal-overlay[data-modal-mode="progress"] .project-risk-list {
         min-height: 0;
@@ -2996,41 +3036,50 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
         grid-template-columns: repeat(auto-fit, minmax(390px, 1fr));
         grid-auto-rows: minmax(0, 1fr);
         align-items: stretch;
-        gap: 6px;
+        gap: 8px;
         overflow: hidden;
-        padding: 6px;
+        padding: 8px;
     }
     #product-modal-overlay[data-modal-mode="progress"] .project-risk-item {
         min-height: 0;
-        grid-template-columns: 28px minmax(130px, 1fr) minmax(68px, .2fr) minmax(92px, .27fr) minmax(60px, .17fr);
-        gap: 7px;
-        padding: 5px 8px;
+        grid-template-columns: 32px minmax(150px, 1fr) minmax(76px, .2fr) minmax(104px, .27fr) minmax(68px, .17fr);
+        gap: 9px;
+        padding: 7px 10px;
     }
     #product-modal-overlay[data-modal-mode="progress"] .project-risk-icon {
-        width: 27px;
-        height: 27px;
-        font-size: 11px;
+        width: 31px;
+        height: 31px;
+        font-size: 13px;
     }
     #product-modal-overlay[data-modal-mode="progress"] .project-risk-main > small,
     #product-modal-overlay[data-modal-mode="progress"] .project-risk-meta > small {
-        font-size: 9px;
+        font-size: 11px;
     }
     #product-modal-overlay[data-modal-mode="progress"] .project-risk-main > strong {
-        font-size: 12px;
+        font-size: 14px;
     }
     #product-modal-overlay[data-modal-mode="progress"] .project-risk-meta > strong {
-        font-size: 11px;
+        font-size: 13px;
     }
     #product-modal-overlay[data-modal-mode="progress"] .project-risk-empty {
         min-height: 0;
         flex: 1 1 auto;
         padding: 6px;
     }
+    #product-modal-overlay[data-modal-mode="progress"] .project-risk-empty > i {
+        font-size: 26px;
+    }
+    #product-modal-overlay[data-modal-mode="progress"] .project-risk-empty strong {
+        font-size: 16px;
+    }
+    #product-modal-overlay[data-modal-mode="progress"] .project-risk-empty small {
+        font-size: 12px;
+    }
 }
 
 @media (min-width: 901px) and (max-height: 820px) {
     #product-modal-overlay[data-modal-mode="progress"] .roadmap-overview {
-        grid-template-rows: 122px minmax(0, 1fr) 98px;
+        grid-template-rows: 118px minmax(0, 1fr) 116px;
         gap: 6px;
     }
     #product-modal-overlay[data-modal-mode="progress"] .roadmap-summary-card {
@@ -3059,7 +3108,7 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
         padding-bottom: 3px;
     }
     #product-modal-overlay[data-modal-mode="progress"] .project-risk-header {
-        min-height: 42px;
-        flex-basis: 42px;
+        min-height: 52px;
+        flex-basis: 52px;
     }
 }
