@@ -7,7 +7,7 @@
     {% load static %}
     <link rel="stylesheet" href="{% static 'bootstrap.min.css' %}">
     <link rel="stylesheet" href="{% static 'fonts/bootstrap-icons.css' %}">
-    <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20260825-riskpalette1">
+    <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20260911-nofooter1">
 </head>
 <body>
 {% if user.is_authenticated %}
@@ -49,37 +49,7 @@
                 <span>操作日志</span>
             </a>
             {% endif %}
-            {% if user.has_usable_password %}
-            <div class="sidebar-section-label">账号</div>
-            <a href="{% url 'change_password' %}" class="sidebar-item {% if request.resolver_match.url_name == 'change_password' %}active{% endif %}">
-                <i class="bi bi-key"></i>
-                <span>修改密码</span>
-            </a>
-            {% endif %}
         </nav>
-        <div class="sidebar-footer">
-            <div class="user-info">
-                <div class="user-avatar">{{ user.username|slice:":1"|upper }}</div>
-                <div class="user-detail">
-                    <div class="user-name">{{ user.username }}</div>
-                    <div class="user-dept">{{ user.profile.department.name|default:'未分配' }}</div>
-                </div>
-            </div>
-            {% if user.profile.is_admin %}
-            <span class="badge-admin">管理员</span>
-            {% endif %}
-            {% if user.has_usable_password %}
-            <a href="{% url 'change_password' %}" class="btn-logout" title="修改密码">
-                <i class="bi bi-key"></i>
-            </a>
-            {% endif %}
-            <form method="post" action="{% url 'logout' %}" class="logout-form">
-                {% csrf_token %}
-                <button type="submit" class="btn-logout" title="退出登录">
-                    <i class="bi bi-box-arrow-right"></i>
-                </button>
-            </form>
-        </div>
     </aside>
 
     <!-- 主内容区 -->

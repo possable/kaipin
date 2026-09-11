@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}登录失败 - 开品项目管理系统{% endblock %}
+{% block auth_content %}
+<div class="login-page">
+    <div class="login-card">
+        <div class="login-header">
+            <div class="login-icon">
+                <i class="bi bi-exclamation-triangle"></i>
+            </div>
+            <h1>企业微信登录失败</h1>
+            <p class="login-subtitle">{{ error_message }}</p>
+        </div>
+        <a href="{% url 'auto_login' %}" class="btn-login-wechat">
+            <i class="bi bi-arrow-clockwise"></i> 重试企业微信登录
+        </a>
+        <div style="height:12px;"></div>
+        <a href="{% url 'login_password' %}" class="btn-login-primary"
+           style="display:flex;align-items:center;justify-content:center;gap:8px;text-decoration:none;">
+            <i class="bi bi-key"></i> 管理员密码登录
+        </a>
+    </div>
+    <p class="login-footer">莱特维健 · 内网系统</p>
+</div>
+{% endblock %}

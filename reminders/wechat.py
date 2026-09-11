@@ -1,3 +1,4 @@
+import time
 import requests
 import logging
 from django.conf import settings
@@ -7,9 +8,16 @@ logger = logging.getLogger(__name__)
 ACCESS_TOKEN_URL = 'https://qyapi.weixin.qq.com/cgi-bin/gettoken'
 MESSAGE_SEND_URL = 'https://qyapi.weixin.qq.com/cgi-bin/message/send'
 
+# access_token 进程内缓存（提前 5 分钟过期）。
+# gunicorn sync worker 单线程处理请求，多进程各自缓存，可接受。
+_token_cache = {'token': None, 'expires_at': 0}
+
 
 def get_access_token():
-    """获取企业微信 access_token"""
+    """获取企业微信 access_token（带进程内缓存，默认有效期 7200 秒）"""
+    now = time.time()
+    if _token_cache['token'] and now < _token_cache['expires_at']:
+        return _token_cache['token']
     resp = requests.get(ACCESS_TOKEN_URL, params={
         'corpid': settings.WECHAT_CORP_ID,
         'corpsecret': settings.WECHAT_APP_SECRET,
@@ -18,7 +26,9 @@ def get_access_token():
     if data.get('errcode') != 0:
         logger.error(f'获取企业微信 token 失败: {data}')
         return None
-    return data['access_token']
+    _token_cache['token'] = data['access_token']
+    _token_cache['expires_at'] = now + int(data.get('expires_in', 7200)) - 300
+    return _token_cache['token']
 
 
 def build_oauth_url(redirect_uri, state=''):
@@ -39,7 +49,7 @@ def build_oauth_url(redirect_uri, state=''):
 
 
 def get_userid_by_code(code):
-    """用 OAuth code 换取企业微信 userid"""
+    """用 OAuth code 换取企业微信 userid；仅返回企业成员 UserId，非成员返回 None。"""
     token = get_access_token()
     if not token:
         return None
@@ -52,7 +62,12 @@ def get_userid_by_code(code):
     if data.get('errcode') != 0:
         logger.error(f'获取 userid 失败: {data}')
         return None
-    return data.get('UserId') or data.get('OpenId')
+    if data.get('UserId'):
+        return data['UserId']
+    # 只返回 OpenId：用户不在企业通讯录中（或不在应用可见范围内），拒绝登录
+    if data.get('OpenId'):
+        logger.warning('企微 OAuth 返回 OpenId（非企业成员），拒绝登录: %s', data['OpenId'])
+    return None
 
 
 def get_user_detail(userid):

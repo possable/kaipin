@@ -1,36 +1,26 @@
 from datetime import datetime
+import secrets
+import logging
+import requests
 from django.shortcuts import redirect, render, get_object_or_404
-from django.contrib.auth import login
+from django.contrib.auth import SESSION_KEY, BACKEND_SESSION_KEY, HASH_SESSION_KEY
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
-from django.contrib.auth.views import PasswordChangeView
 from django.contrib import messages
 from django.db.models import Q
 from django.http import JsonResponse
-from django.urls import reverse, reverse_lazy
+from django.urls import reverse
 from django.utils import timezone
 from django.utils.crypto import get_random_string
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 from reminders.wechat import build_oauth_url, get_userid_by_code, get_user_detail
 from accounts.models import Department, TodoItem, Announcement
 from accounts.decorators import admin_required
 from accounts.utils import get_or_create_user_from_wechat
 from activity_log.utils import log_action
-import logging
 
 logger = logging.getLogger(__name__)
-
-
-class ChangePasswordView(PasswordChangeView):
-    """本地密码用户修改密码。企微扫码用户没有可用密码，Django 自带 form 会拒绝。"""
-    template_name = 'registration/change_password.html'
-    success_url = reverse_lazy('password_change_done')
-
-    def form_valid(self, form):
-        response = super().form_valid(form)
-        log_action(self.request.user, '修改密码', 'user', self.request.user.id,
-                   self.request.user.first_name or self.request.user.username, '')
-        return response
 
 
 @admin_required
@@ -59,7 +49,7 @@ def reset_user_password(request, user_id):
     target = get_object_or_404(User, pk=user_id)
     if target.id == request.user.id:
         return JsonResponse(
-            {'error': '不能重置自己的密码，请用侧边栏"修改密码"功能'},
+            {'error': '不能重置自己的密码'},
             status=400
         )
     new_password = get_random_string(
@@ -95,37 +85,91 @@ def toggle_admin_role(request, user_id):
         return JsonResponse({'success': True, 'is_admin': True})
 
 
-def auto_login(request):
-    """工作台免登录入口——企业微信工作台主页直接配这个 URL。
-    流程：有 session → 直接进看板；URL 带 code → 换 token 登录；
-    都没有 → 静默 OAuth 跳转（snsapi_base，用户无感知）。"""
-    # 已登录，直接进
-    if request.user.is_authenticated:
-        return redirect('kanban')
+OAUTH_STATE_SESSION_KEY = 'wecom_oauth_state'
+OAUTH_NEXT_SESSION_KEY = 'wecom_oauth_next'
 
-    # URL 带 code（OAuth 回调），交换身份并登录
-    code = request.GET.get('code')
-    if code:
-        return _wechat_code_login(request, code)
 
-    # 无身份无 code，发起静默 OAuth
+def _wecom_callback_url(request):
+    """企微 OAuth 回调地址，固定指向 auto_login 入口（SITE_URL 覆盖保证 https）。"""
     callback_url = request.build_absolute_uri(reverse('auto_login'))
-    # 如果部署在代理（Cloudflare Tunnel）后面，确保回调地址使用 HTTPS
     from django.conf import settings
     if settings.SITE_URL and settings.SITE_URL.startswith('https'):
         callback_url = settings.SITE_URL.rstrip('/') + reverse('auto_login')
-    oauth_url = build_oauth_url(callback_url)
-    return redirect(oauth_url)
+    return callback_url
+
+
+def _get_safe_next(request):
+    """从 GET 参数读取 next，只允许站内相对路径，防止开放重定向。"""
+    next_url = request.GET.get('next', '').strip()
+    if next_url and not next_url.startswith('//') \
+            and url_has_allowed_host_and_scheme(next_url, None):
+        return next_url
+    return None
+
+
+def _start_wecom_oauth(request, next_url=None):
+    """生成 state 并保存 next 到 session，返回企微 OAuth 授权链接。"""
+    state = secrets.token_urlsafe(32)
+    request.session[OAUTH_STATE_SESSION_KEY] = state
+    if next_url:
+        request.session[OAUTH_NEXT_SESSION_KEY] = next_url
+    return build_oauth_url(_wecom_callback_url(request), state=state)
+
+
+def auto_login(request):
+    """工作台免登录入口 + OAuth 回调——企业微信工作台主页直接配这个 URL。
+    流程：有 session → 直接进看板；URL 带 code → 校验 state 后换身份登录；
+    都没有 → 静默 OAuth 跳转（snsapi_base，用户无感知）。"""
+    # 已登录，直接进
+    if request.user.is_authenticated:
+        next_url = request.session.pop(OAUTH_NEXT_SESSION_KEY, None)
+        return redirect(next_url or 'kanban')
+
+    # URL 带 code（OAuth 回调），先校验 state 再交换身份
+    code = request.GET.get('code')
+    if code:
+        expected_state = request.session.pop(OAUTH_STATE_SESSION_KEY, None)
+        if not expected_state or request.GET.get('state') != expected_state:
+            logger.warning(
+                '企微 OAuth state 校验失败: got_state=%s, expected=%s, cookies=%s, ua=%s, ip=%s',
+                request.GET.get('state'), bool(expected_state),
+                sorted(request.COOKIES.keys()),
+                (request.META.get('HTTP_USER_AGENT') or '')[:100],
+                request.META.get('REMOTE_ADDR'))
+            return render(request, 'registration/wecom_error.html', {
+                'error_message': '登录状态校验失败，请重新发起登录。',
+            })
+        user = _wechat_code_login(request, code)
+        if user is None:
+            return render(request, 'registration/wecom_error.html', {
+                'error_message': '企业微信登录失败，请稍后重试；如持续失败请联系管理员。',
+            })
+        next_url = request.session.pop(OAUTH_NEXT_SESSION_KEY, None)
+        return redirect(next_url or 'kanban')
+
+    # 无身份无 code，发起静默 OAuth（保留 session 里的 next，双标签页场景兜底）
+    next_url = _get_safe_next(request)
+    if not next_url:
+        next_url = request.session.get(OAUTH_NEXT_SESSION_KEY)
+    return redirect(_start_wecom_oauth(request, next_url))
 
 
 def _wechat_code_login(request, code):
-    """用 OAuth code 换取企微身份并登录"""
-    userid = get_userid_by_code(code)
+    """用 OAuth code 换取企微身份并登录。成功返回 User，失败返回 None。"""
+    try:
+        userid = get_userid_by_code(code)
+    except (requests.RequestException, ValueError) as e:
+        logger.error(f'企微获取 userid 异常: {e}')
+        return None
     if not userid:
-        messages.error(request, '获取企业微信身份失败，请联系管理员。')
-        return redirect('login')
+        logger.warning('企微 code 换 userid 失败（code 无效/过期或非企业成员）')
+        return None
 
-    detail = get_user_detail(userid)
+    try:
+        detail = get_user_detail(userid)
+    except (requests.RequestException, ValueError) as e:
+        logger.error(f'企微获取用户详情异常: {e}')
+        return None
     chinese_name = (detail.get('name', '') if detail else '') or userid
     dept_ids = (detail.get('department', []) if detail else [])
 
@@ -133,19 +177,31 @@ def _wechat_code_login(request, code):
     if created:
         logger.info(f'新用户通过企微工作台登录: {chinese_name} ({user.username})')
 
-    login(request, user, backend='django.contrib.auth.backends.ModelBackend')
+    # 企微客户端内置浏览器在 302 跳转链路上不更新 cookie，标准 login() 会
+    # cycle_key 换新 sessionid，导致登录态无法持久（表现为登录成功后立刻
+    # 又弹回 OAuth 死循环）。这里手动写入认证信息、保持原 session 键不变。
+    # backend 必须用 settings.AUTHENTICATION_BACKENDS 里注册的，否则
+    # get_user() 会丢弃登录态（写 ModelBackend 会静默失效）。
+    from django.conf import settings
+    request.session[SESSION_KEY] = user._meta.pk.value_to_string(user)
+    request.session[BACKEND_SESSION_KEY] = settings.AUTHENTICATION_BACKENDS[0]
+    request.session[HASH_SESSION_KEY] = user.get_session_auth_hash()
+    request.session.modified = True
+
     messages.success(request, f'欢迎, {user.first_name or user.username}!')
-    return redirect('kanban')
+    return user
 
 
 def wechat_login(request):
-    """发起企业微信 OAuth 扫码登录（保留给旧入口）"""
-    callback_url = request.build_absolute_uri(reverse('auto_login'))
-    from django.conf import settings
-    if settings.SITE_URL and settings.SITE_URL.startswith('https'):
-        callback_url = settings.SITE_URL.rstrip('/') + reverse('auto_login')
-    oauth_url = build_oauth_url(callback_url)
-    return redirect(oauth_url)
+    """发起企业微信 OAuth 登录（/accounts/login/ 默认入口，wechat-login/ 保留旧入口）。"""
+    if request.user.is_authenticated:
+        next_url = request.session.pop(OAUTH_NEXT_SESSION_KEY, None)
+        return redirect(next_url or 'kanban')
+
+    next_url = _get_safe_next(request)
+    if not next_url:
+        next_url = request.session.get(OAUTH_NEXT_SESSION_KEY)
+    return redirect(_start_wecom_oauth(request, next_url))
 
 
 # ========================================

@@ -21,6 +21,9 @@ CSRF_TRUSTED_ORIGINS = [
 # 系统访问地址，用于企微提醒消息等场景拼接可点击链接
 SITE_URL = env.str('SITE_URL', default='http://localhost:8000')
 
+# 信任 nginx 转发过来的 https 标记（gunicorn 只监听 127.0.0.1，客户端无法直接伪造该头）
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -114,3 +117,22 @@ AUTHENTICATION_BACKENDS = [
 WECHAT_CORP_ID = env('WECHAT_CORP_ID')
 WECHAT_AGENT_ID = env('WECHAT_AGENT_ID')
 WECHAT_APP_SECRET = env('WECHAT_APP_SECRET')
+
+# DEBUG=False 后 django.request 默认只走 mail_admins，未配 ADMINS 时异常堆栈会被静默丢弃。
+# 显式导到 stderr，由 systemd 收进 journald，保证 500 仍可排查。
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+        },
+    },
+    'loggers': {
+        'django.request': {
+            'handlers': ['console'],
+            'level': 'ERROR',
+            'propagate': False,
+        },
+    },
+}

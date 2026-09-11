@@ -1,16 +1,16 @@
 from django.urls import path
 from django.contrib.auth import views as auth_views
+from django.views.generic import RedirectView
 from . import views
 
 urlpatterns = [
-    path('login/', auth_views.LoginView.as_view(), name='login'),
+    path('login/', views.wechat_login, name='login'),
+    path('login/password/', auth_views.LoginView.as_view(), name='login_password'),
     path('logout/', auth_views.LogoutView.as_view(), name='logout'),
     path('auto-login/', views.auto_login, name='auto_login'),
     path('wechat-login/', views.wechat_login, name='wechat_login'),
-    path('change-password/', views.ChangePasswordView.as_view(), name='change_password'),
-    path('change-password/done/', auth_views.PasswordChangeDoneView.as_view(
-        template_name='registration/change_password_done.html',
-    ), name='password_change_done'),
+    # 自助改密已下线（全员企微免密登录）。保留旧地址重定向回看板，避免旧书签/旧标签页撞 404。
+    path('change-password/', RedirectView.as_view(pattern_name='kanban', permanent=False)),
     path('users/', views.user_list, name='user_list'),
     path('users/<int:user_id>/reset-password/', views.reset_user_password, name='reset_user_password'),
     path('users/<int:user_id>/toggle-admin/', views.toggle_admin_role, name='toggle_admin_role'),

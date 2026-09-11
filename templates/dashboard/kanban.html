@@ -100,12 +100,12 @@
     <colgroup>
         <col style="width:120px"><col style="width:300px"><col style="width:65px">
         <col style="width:85px"><col style="width:85px"><col style="width:70px"><col style="width:90px">
-        <col style="width:55px"><col style="width:60px">
+        <col style="width:55px"><col style="width:48px"><col style="width:48px">
     </colgroup>
     <thead><tr>
-        <th>项目名称</th><th>阶段进度</th><th>负责人</th>
+        <th>项目名称</th><th class="stage-col">阶段进度</th><th>负责人</th>
         <th>开始时间</th><th>预计结束时间</th><th>剩余天数</th><th>状态</th>
-        <th>优先级</th><th>操作</th>
+        <th>优先级</th><th>详情</th><th>导出</th>
     </tr></thead>
     <tbody>
     {% for p in products %}
@@ -113,7 +113,7 @@
         <td>
             <button type="button" class="project-name" onclick="event.stopPropagation();openProductProgressModal({{ p.id }}, '{{ p.name|escapejs }}')">{{ p.name }}</button>
         </td>
-        <td>
+        <td class="stage-col">
             {% if p.all_stages %}
             <div class="stage-progress">
                 <div class="stage-line">
@@ -169,12 +169,15 @@
                 {% if p.priority == 'high' %}高{% elif p.priority == 'mid' %}中{% else %}低{% endif %}
             </div>
         </td>
-        <td>
-            <button type="button" class="kanban-action-btn" title="查看详情" onclick="event.stopPropagation();openProductModal({{ p.id }}, '{{ p.name|escapejs }}')"><i class="bi bi-eye"></i></button>
-            <a href="{% url 'export_csv' %}?product={{ p.id }}" class="kanban-action-btn" title="导出" onclick="event.stopPropagation()"><i class="bi bi-download"></i></a>
-            {% if p.can_delete %}
-            <button type="button" class="kanban-action-btn delete" title="删除" onclick="event.stopPropagation();deleteArchivedProduct({{ p.id }}, '{{ p.name|escapejs }}', this)"><i class="bi bi-trash"></i></button>
-            {% endif %}
+        <td class="actions-cell">
+            <div class="actions-row">
+                <button type="button" class="kanban-action-btn" title="查看详情" onclick="event.stopPropagation();openProductModal({{ p.id }}, '{{ p.name|escapejs }}')"><i class="bi bi-eye"></i></button>
+            </div>
+        </td>
+        <td class="actions-cell">
+            <div class="actions-row">
+                <a href="{% url 'export_csv' %}?product={{ p.id }}" class="kanban-action-btn" title="导出" onclick="event.stopPropagation()"><i class="bi bi-download"></i></a>
+            </div>
         </td>
     </tr>
     {% endfor %}
