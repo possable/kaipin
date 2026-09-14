@@ -11,6 +11,9 @@
 </head>
 <body>
 {% if user.is_authenticated %}
+{# 全局 CSRF token：app.js 的 getCSRFToken() 从这里取值，所有 AJAX POST 都依赖它。 #}
+{# 不要删除——base 里没有它时页面上不存在 csrfmiddlewaretoken，全部写操作会被 403 拒绝。 #}
+{% csrf_token %}
 <div class="app-layout">
     <!-- 侧边栏 -->
     <aside class="sidebar">

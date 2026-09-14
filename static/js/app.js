@@ -1,14 +1,25 @@
 function getCSRFToken() {
+    // 优先取页面上的隐藏 input（base.html 里有全局 {% csrf_token %}）
     const el = document.querySelector('[name=csrfmiddlewaretoken]');
-    return el ? el.value : '';
+    if (el && el.value) return el.value;
+    // 兜底：读 csrftoken Cookie（Django 每次响应都会下发），
+    // 这样即使某个页面漏渲染 csrf_token，写操作也不会整页失效
+    const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+    return m ? decodeURIComponent(m[1]) : '';
 }
 
 async function postJSON(url, data) {
-    return fetch(url, {
+    const resp = await fetch(url, {
         method: 'POST',
         headers: { 'X-CSRFToken': getCSRFToken() },
         body: data,
     });
+    // CSRF 校验失败时 Django 返回 HTML 403 页（业务层的无权限错误是 JSON 403），
+    // 这种要提示刷新，否则按钮点下去会像没反应
+    if (resp.status === 403 && !(resp.headers.get('content-type') || '').includes('application/json')) {
+        showToast('登录状态或校验已失效，请刷新页面后重试', 'error');
+    }
+    return resp;
 }
 
 // ============ Toast 通知 ============
