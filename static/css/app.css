@@ -430,6 +430,10 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
 .btn-success:hover { opacity: 0.88; }
 .btn-danger { background: transparent; color: var(--red); border-color: var(--color-danger-border); }
 .btn-danger:hover { background: var(--color-danger-bg); }
+/* 彻底删除专用：和「取消」并排时必须有更强的分量 —— 取消后还能恢复，删除不可撤销。
+   两者都用 btn-danger 的话，两个长得一模一样的红框按钮挨在一起，后果却差一个量级。 */
+.btn-danger-solid { background: var(--red); color: #fff; border-color: var(--red); }
+.btn-danger-solid:hover { filter: brightness(1.12); }
 .btn-sm { padding: 4px 10px; font-size: 12px; }
 .btn-loading { opacity: 0.6; pointer-events: none; cursor: wait; }
 

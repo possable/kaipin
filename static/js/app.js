@@ -440,6 +440,23 @@ async function deleteArchivedProduct(productId, productName, btn) {
     }
 }
 
+// 详情页 / 信息弹窗里彻底删除一个品。
+// 进行中的品会被后端拒掉（400「进行中的品不能删除，请先取消」），这里把后端那句话
+// 原样弹出来 —— 规则只写在后端一处，前端不再抄一遍状态判断，免得两边说法不一致。
+async function deleteProduct(productId, productName) {
+    if (!confirm(`确定彻底删除 "${productName}"？此操作不可撤销，将同时删除其全部阶段、任务、附件和日志。`)) return;
+    disableButtons();
+    const resp = await postJSON(`/products/${productId}/delete/`);
+    if (resp.ok) {
+        // 详情页和看板弹窗都回看板：弹窗就挂在看板上，整页刷新等于顺带关掉它
+        window.location.href = '/';
+    } else {
+        enableButtons();
+        const data = await resp.json();
+        showToast('删除失败: ' + (data.error || '未知错误'), 'error');
+    }
+}
+
 // 手动开始并行阶段
 async function startStage(stageId) {
     disableButtons();

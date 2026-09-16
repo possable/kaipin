@@ -1,0 +1,17 @@
+# 每日提醒扫描：任务临近/超期提醒 + 阶段、品的超期聚合通知。
+# 由 kaipin-remind.timer 每日触发。
+# 放到 /etc/systemd/system/kaipin-remind.service
+
+[Unit]
+Description=Kaipin 每日提醒扫描
+After=network.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/kaipin
+EnvironmentFile=/opt/kaipin/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/kaipin/venv311/bin/python manage.py scan_reminders

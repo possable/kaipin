@@ -10,15 +10,23 @@
             <h1>企业微信登录失败</h1>
             <p class="login-subtitle">{{ error_message }}</p>
         </div>
+        {# 必须按出错的那个企业重试 #}
+        {# 走 auto_login 会把 B 企业的用户送回 A 企业的 OAuth，表现就是「点了重试还是同一个错误页」 #}
+        {% if corp_code %}
+        <a href="{% url 'corp_login' corp_code %}" class="btn-login-wechat">
+            <i class="bi bi-arrow-clockwise"></i> 重试企业微信登录
+        </a>
+        {% else %}
         <a href="{% url 'auto_login' %}" class="btn-login-wechat">
             <i class="bi bi-arrow-clockwise"></i> 重试企业微信登录
         </a>
+        {% endif %}
         <div style="height:12px;"></div>
         <a href="{% url 'login_password' %}" class="btn-login-primary"
            style="display:flex;align-items:center;justify-content:center;gap:8px;text-decoration:none;">
             <i class="bi bi-key"></i> 管理员密码登录
         </a>
     </div>
-    <p class="login-footer">莱特维健 · 内网系统</p>
+    <p class="login-footer">{% if corp_name %}{{ corp_name }} · 内网系统{% else %}内网系统{% endif %}</p>
 </div>
 {% endblock %}

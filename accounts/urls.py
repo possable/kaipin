@@ -8,6 +8,8 @@ urlpatterns = [
     path('login/password/', auth_views.LoginView.as_view(), name='login_password'),
     path('logout/', auth_views.LogoutView.as_view(), name='logout'),
     path('auto-login/', views.auto_login, name='auto_login'),
+    # 按企业登录入口：三个企业的工作台各配一个，如 /accounts/c/b-corp/
+    path('c/<slug:code>/', views.corp_login, name='corp_login'),
     path('wechat-login/', views.wechat_login, name='wechat_login'),
     # 自助改密已下线（全员企微免密登录）。保留旧地址重定向回看板，避免旧书签/旧标签页撞 404。
     path('change-password/', RedirectView.as_view(pattern_name='kanban', permanent=False)),

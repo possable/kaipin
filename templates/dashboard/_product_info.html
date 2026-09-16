@@ -7,10 +7,21 @@
     </button>
 </div>
 {% endif %}
-{% if product.status == 'active' and can_manage %}
-<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+{% comment %}
+操作按钮。删除**不能**和取消共用同一个 status 判断：取消只对进行中的品可用，
+两者绑在一起的话，取消成功后按钮会一起消失，就再也删不掉了。
+进行中的品点删除会被后端拒掉并提示先取消（products/views.py:1147），这正是要的行为。
+{% endcomment %}
+{% if can_manage %}
+<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px;">
+    {% if product.status == 'active' %}
     <button type="button" class="btn btn-danger btn-sm" onclick="cancelProduct({{ product.pk }})">
         <i class="bi bi-x-circle"></i> 取消该品
+    </button>
+    {% endif %}
+    <button type="button" class="btn btn-danger-solid btn-sm"
+            onclick="deleteProduct({{ product.pk }}, '{{ product.name|escapejs }}')">
+        <i class="bi bi-trash"></i> 删除该品
     </button>
 </div>
 {% endif %}

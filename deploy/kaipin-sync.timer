@@ -1,0 +1,18 @@
+# 放到 /etc/systemd/system/kaipin-sync.timer
+# 启用：systemctl daemon-reload && systemctl enable --now kaipin-sync.timer
+#
+# 07:50 跑，比提醒扫描（09:00）早，保证当天的部门/人员变动先落地。
+
+[Unit]
+Description=每日触发 Kaipin 企业微信组织架构同步
+
+[Timer]
+OnCalendar=*-*-* 07:50:00
+# 机器在触发点关机/休眠时，开机后补跑一次
+Persistent=true
+# 避免多台机器或补跑时扎堆，随机延迟最多 5 分钟
+RandomizedDelaySec=300
+Unit=kaipin-sync.service
+
+[Install]
+WantedBy=timers.target

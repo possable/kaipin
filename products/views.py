@@ -18,7 +18,7 @@ from .models import (
 )
 from templates_app.models import StageTemplate
 from activity_log.utils import log_action
-from reminders.wechat import send_wechat_message
+from reminders.wechat import send_message_to_user
 from django.conf import settings
 
 from .progress_export import render_product_progress_png
@@ -191,8 +191,7 @@ def _notify_new_assignee(entity, old_assignee, new_assignee, changed_by, context
     if new_assignee == changed_by:
         return          # 自己设自己，不发
 
-    wechat_id = getattr(getattr(new_assignee, 'profile', None), 'wechat_userid', '')
-    if not wechat_id:
+    if not getattr(getattr(new_assignee, 'profile', None), 'wechat_userid', ''):
         return
 
     recipient_name = new_assignee.first_name or new_assignee.username
@@ -204,7 +203,8 @@ def _notify_new_assignee(entity, old_assignee, new_assignee, changed_by, context
     )
 
     try:
-        send_wechat_message(wechat_id, content)
+        # 按收件人所在企业发送，避免用错企业的应用导致消息静默丢失
+        send_message_to_user(new_assignee, content)
         log_action(changed_by, f'通知新负责人（{context}）', 'user', new_assignee.id,
                    new_assignee.first_name or new_assignee.username, '已发送企微通知')
     except Exception:

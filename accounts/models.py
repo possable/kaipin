@@ -4,6 +4,46 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 
 
+class WeComCorp(models.Model):
+    """一个企业微信企业，对应一套 corp_id / agent_id / app_secret。
+
+    三个企业共用一个 Django 实例、一套项目数据、一套职能部门，
+    差别只在「从哪个企业微信登录」和「用哪个企业的应用发消息」。
+    每个企业配一个入口 URL：/accounts/c/<code>/。
+
+    code 是给人看的短标识（也出现在 URL 里），corp_id 是企业微信那边的 ID，
+    两者不要混用：code 可以随便起，corp_id 必须和企业微信后台一致。
+    """
+    code = models.SlugField(
+        max_length=32, unique=True,
+        verbose_name='标识', help_text='用于 URL，如 default / b-corp，仅限字母数字和下划线连字符'
+    )
+    name = models.CharField(max_length=100, verbose_name='企业名称')
+    corp_id = models.CharField(max_length=100, verbose_name='企业ID (corp_id)')
+    agent_id = models.CharField(max_length=32, verbose_name='应用ID (agent_id)')
+    app_secret = models.CharField(max_length=200, verbose_name='应用密钥 (Secret)')
+    is_active = models.BooleanField(default=True, verbose_name='启用')
+    is_default = models.BooleanField(
+        default=False, verbose_name='默认企业',
+        help_text='旧入口 /accounts/auto-login/ 落到的企业，全局只应有一条为真'
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+
+    class Meta:
+        verbose_name = '企业微信企业'
+        verbose_name_plural = '企业微信企业'
+        ordering = ['id']
+
+    def __str__(self):
+        return f'{self.name}({self.code})'
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        # 保证「默认企业」全局唯一：把别的行取消掉
+        if self.is_default:
+            WeComCorp.objects.exclude(pk=self.pk).filter(is_default=True).update(is_default=False)
+
+
 class Department(models.Model):
     """部门，如策划部、设计部等"""
     name = models.CharField(max_length=50, unique=True, verbose_name='部门名称')
@@ -19,6 +59,50 @@ class Department(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class WeComDept(models.Model):
+    """一个企业微信部门 → 一个共享 Department 的映射。
+
+    三个企业的部门 id 各自独立、且**会互相撞号**（A 的 wechat_dept_id=16 是
+    「产品部」，B 的 id=16 是「采购部」）。所以绝不能拿企微返回的部门 id 直接查
+    `Department.wechat_dept_id` —— 那正是「B 的采购部员工拿到产品部编辑权限」的成因。
+    必须先经过本表换算成共享部门。
+
+    Department 表本身**保持共享、不加企业字段**：三个企业的「设计部」都指向同一行，
+    所以所有 `stage.department == user.profile.department` 的权限判断一行都不用改。
+
+    is_manual=True 的记录，同步命令永不覆盖（否则每天 07:50 会把人工修正打回去）。
+    """
+    corp = models.ForeignKey(
+        WeComCorp, on_delete=models.CASCADE, related_name='depts', verbose_name='企业'
+    )
+    wechat_dept_id = models.IntegerField(verbose_name='企业微信部门ID')
+    name = models.CharField(max_length=100, verbose_name='企微部门名称')
+    department = models.ForeignKey(
+        Department, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='wecom_depts', verbose_name='映射到的共享部门',
+        help_text='留空表示该企微部门暂未对应到任何共享部门'
+    )
+    is_manual = models.BooleanField(
+        default=False, verbose_name='人工指定',
+        help_text='勾选后自动同步不会覆盖本行的映射'
+    )
+    is_root = models.BooleanField(
+        default=False, verbose_name='根部门',
+        help_text='企业自身那一层，不参与「主部门」解析'
+    )
+
+    class Meta:
+        verbose_name = '企业微信部门映射'
+        verbose_name_plural = '企业微信部门映射'
+        ordering = ['corp_id', 'wechat_dept_id']
+        # 同一企业内部门 id 唯一；不同企业可以同名同 id
+        unique_together = [('corp', 'wechat_dept_id')]
+
+    def __str__(self):
+        target = self.department.name if self.department else '未映射'
+        return f'{self.corp.code}/{self.wechat_dept_id} {self.name} → {target}'
 
 
 class UserProfile(models.Model):
@@ -39,6 +123,11 @@ class UserProfile(models.Model):
         max_length=100, blank=True, default='',
         verbose_name='企业微信UserID'
     )
+    wecom_corp = models.ForeignKey(
+        WeComCorp, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='profiles', verbose_name='所属企业',
+        help_text='只有「主身份」写在这里，完整的多企业身份见「企业微信身份」'
+    )
     role = models.CharField(
         max_length=10, choices=ROLE_CHOICES, default='member',
         verbose_name='角色'
@@ -47,6 +136,11 @@ class UserProfile(models.Model):
     class Meta:
         verbose_name = '用户资料'
         verbose_name_plural = '用户资料'
+        # 同一个企业内，一个企微 userid 只能属于一个账号。
+        # MySQL 唯一索引里 NULL 互不冲突，所以未绑定的行（wecom_corp=NULL）可以有多条。
+        # ⚠️ 本约束只在「同企业内」成立：同一个人在两个企业有两套 userid，
+        #    由 WeComIdentity 承载，这里存的只是主身份。
+        unique_together = [('wecom_corp', 'wechat_userid')]
 
     def __str__(self):
         dept_name = self.department.name if self.department else '未分配部门'
@@ -55,6 +149,39 @@ class UserProfile(models.Model):
     @property
     def is_admin(self):
         return self.role == 'admin'
+
+
+class WeComIdentity(models.Model):
+    """一个账号在某个企业微信里的身份（corp + userid）。
+
+    为什么不能只用 UserProfile.wechat_userid 存：实测 B 企业 60 人里有 23 人
+    （38%）和 A 企业是同一批人，其中 5 个人在两个企业的 userid **不一样**
+    （如 阮仕云 A=Ruanivan / B=ivanRuan）。一个字段存不下两个 userid。
+
+    同一 (企业, userid) 全局唯一；(账号, 企业) 也唯一 —— 后者保证不会给同一个人
+    在同一个企业里建出两条身份。
+    """
+    corp = models.ForeignKey(
+        WeComCorp, on_delete=models.CASCADE, related_name='identities', verbose_name='企业'
+    )
+    userid = models.CharField(max_length=100, verbose_name='企业微信UserID')
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name='wecom_identities', verbose_name='账号'
+    )
+    is_primary = models.BooleanField(
+        default=False, verbose_name='主身份',
+        help_text='发企微消息时用哪套凭证。只有一个企业时无所谓，多企业时取主身份'
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+
+    class Meta:
+        verbose_name = '企业微信身份'
+        verbose_name_plural = '企业微信身份'
+        ordering = ['user_id', '-is_primary', 'id']
+        unique_together = [('corp', 'userid'), ('user', 'corp')]
+
+    def __str__(self):
+        return f'{self.user.username}@{self.corp.code}({self.userid})'
 
 
 @receiver(post_save, sender=User)

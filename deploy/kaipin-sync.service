@@ -1,0 +1,19 @@
+# 企业微信组织架构同步（部门 + 成员），由 kaipin-sync.timer 每日触发。
+# 放到 /etc/systemd/system/kaipin-sync.service
+#
+# 原实现是 gunicorn 进程内 APScheduler，因为启动守卫只有 runserver 会满足，
+# 生产环境从未执行过。改成本单元后每台机器只跑一次，不会随 worker 数重复。
+
+[Unit]
+Description=Kaipin 企业微信组织架构同步
+After=network.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/kaipin
+EnvironmentFile=/opt/kaipin/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/kaipin/venv311/bin/python manage.py sync_wechat_org

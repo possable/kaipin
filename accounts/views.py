@@ -87,15 +87,25 @@ def toggle_admin_role(request, user_id):
 
 OAUTH_STATE_SESSION_KEY = 'wecom_oauth_state'
 OAUTH_NEXT_SESSION_KEY = 'wecom_oauth_next'
+# 上次成功发起/完成登录的企业。同时也是 OAuth 回调时「该用哪个企业的 token 换 code」的依据。
+OAUTH_CORP_SESSION_KEY = 'wecom_corp_code'
 
 
-def _wecom_callback_url(request):
-    """企微 OAuth 回调地址，固定指向 auto_login 入口（SITE_URL 覆盖保证 https）。"""
-    callback_url = request.build_absolute_uri(reverse('auto_login'))
+def _wecom_callback_url(request, view_name, args=None):
+    """企微 OAuth 回调地址（SITE_URL 覆盖保证 https）。
+
+    回调路径必须能区分企业：OAuth 的 code 是**企业内**的一次性凭证，
+    只能拿同一个企业的 token 去换。所以每个企业一个回调路径
+    （/accounts/c/<code>/），换 code 时不用猜是哪个企业。
+
+    auto_login 的路径保持原样不带企业 —— 现网 A 企业工作台配的就是它，不能断；
+    它固定用默认企业，与新增 corp 之前的行为逐字节一致。
+    """
+    path = reverse(view_name, args=args or [])
     from django.conf import settings
     if settings.SITE_URL and settings.SITE_URL.startswith('https'):
-        callback_url = settings.SITE_URL.rstrip('/') + reverse('auto_login')
-    return callback_url
+        return settings.SITE_URL.rstrip('/') + path
+    return request.build_absolute_uri(path)
 
 
 def _get_safe_next(request):
@@ -107,21 +117,27 @@ def _get_safe_next(request):
     return None
 
 
-def _start_wecom_oauth(request, next_url=None):
+def _start_wecom_oauth(request, corp, view_name='auto_login', args=None, next_url=None):
     """生成 state 并保存 next 到 session，返回企微 OAuth 授权链接。"""
     state = secrets.token_urlsafe(32)
     request.session[OAUTH_STATE_SESSION_KEY] = state
+    # 在这里就记下企业，而不是等登录成功 —— auto_login 的回调路径不带企业标识，
+    # 回调进来时只能靠这个 session 值判断该用哪个企业换 code。
+    request.session[OAUTH_CORP_SESSION_KEY] = corp.code
     if next_url:
         request.session[OAUTH_NEXT_SESSION_KEY] = next_url
-    return build_oauth_url(_wecom_callback_url(request), state=state)
+    return build_oauth_url(
+        _wecom_callback_url(request, view_name, args), state=state, corp=corp,
+    )
 
 
-def auto_login(request):
-    """工作台免登录入口 + OAuth 回调——企业微信工作台主页直接配这个 URL。
-    流程：有 session → 直接进看板；URL 带 code → 校验 state 后换身份登录；
-    都没有 → 静默 OAuth 跳转（snsapi_base，用户无感知）。"""
-    # 已登录，直接进
-    if request.user.is_authenticated:
+def _oauth_entry(request, corp, view_name, args=None, force_reauth=False):
+    """auto_login 与 corp_login 共用的流程。
+
+    有身份 → 直接进看板；URL 带 code → 校验 state 后换身份登录；
+    都没有 → 静默 OAuth 跳转（snsapi_base，用户无感知）。
+    """
+    if request.user.is_authenticated and not force_reauth:
         next_url = request.session.pop(OAUTH_NEXT_SESSION_KEY, None)
         return redirect(next_url or 'kanban')
 
@@ -138,11 +154,15 @@ def auto_login(request):
                 request.META.get('REMOTE_ADDR'))
             return render(request, 'registration/wecom_error.html', {
                 'error_message': '登录状态校验失败，请重新发起登录。',
+                'corp_code': corp.code,
+                'corp_name': corp.name,
             })
-        user = _wechat_code_login(request, code)
+        user = _wechat_code_login(request, code, corp)
         if user is None:
             return render(request, 'registration/wecom_error.html', {
                 'error_message': '企业微信登录失败，请稍后重试；如持续失败请联系管理员。',
+                'corp_code': corp.code,
+                'corp_name': corp.name,
             })
         next_url = request.session.pop(OAUTH_NEXT_SESSION_KEY, None)
         return redirect(next_url or 'kanban')
@@ -151,13 +171,49 @@ def auto_login(request):
     next_url = _get_safe_next(request)
     if not next_url:
         next_url = request.session.get(OAUTH_NEXT_SESSION_KEY)
-    return redirect(_start_wecom_oauth(request, next_url))
+    return redirect(_start_wecom_oauth(request, corp, view_name, args, next_url))
 
 
-def _wechat_code_login(request, code):
+def auto_login(request):
+    """工作台免登录入口 + OAuth 回调——企业微信工作台主页直接配这个 URL。
+
+    固定走**默认企业**。现网 A 企业的工作台配的就是这个 URL，行为和改造前完全一致。
+    新增的企业用 /accounts/c/<code>/，不要动这里。
+    """
+    from accounts.wecom import default_corp
+    return _oauth_entry(request, default_corp(), 'auto_login')
+
+
+def corp_login(request, code):
+    """按企业登录入口：/accounts/c/<code>/。三个企业的工作台各配一个。
+
+    未知 code 报错页，**不退回默认企业** —— 退回就是当初 B 登不进去的成因：
+    员工被静默送去另一个企业的 OAuth，只拿到 OpenId，页面上只说「登录失败」。
+    """
+    from accounts.wecom import UnknownCorp, get_corp_strict
+    try:
+        corp = get_corp_strict(code)
+    except UnknownCorp:
+        logger.warning('未知的企业登录入口: code=%r ua=%s ip=%s',
+                       code, (request.META.get('HTTP_USER_AGENT') or '')[:100],
+                       request.META.get('REMOTE_ADDR'))
+        return render(request, 'registration/wecom_error.html', {
+            'error_message': f'登录入口「{code}」不存在或已停用，'
+                             f'请从企业微信工作台重新进入；如持续失败请联系管理员。',
+        }, status=404)
+
+    # 同一台手机上三个企业共用一个 cookie jar。张三在 A 登录过之后 session 里
+    # 留着 A 的 code，这时他点 B 的入口，若不重走 OAuth 就会直接进看板、
+    # 身份还是 A 的。改成「session 里的企业 ≠ 路径上的企业」就强制重走一次。
+    # 代价只是跨企业入口时多一次 302，同一企业内不受影响。
+    force_reauth = request.session.get(OAUTH_CORP_SESSION_KEY) != corp.code
+    return _oauth_entry(request, corp, 'corp_login', [corp.code], force_reauth)
+
+
+def _wechat_code_login(request, code, corp):
     """用 OAuth code 换取企微身份并登录。成功返回 User，失败返回 None。"""
     try:
-        userid = get_userid_by_code(code)
+        userid = get_userid_by_code(code, corp)
     except (requests.RequestException, ValueError) as e:
         logger.error(f'企微获取 userid 异常: {e}')
         return None
@@ -166,14 +222,15 @@ def _wechat_code_login(request, code):
         return None
 
     try:
-        detail = get_user_detail(userid)
+        detail = get_user_detail(userid, corp)
     except (requests.RequestException, ValueError) as e:
         logger.error(f'企微获取用户详情异常: {e}')
         return None
     chinese_name = (detail.get('name', '') if detail else '') or userid
     dept_ids = (detail.get('department', []) if detail else [])
 
-    user, created = get_or_create_user_from_wechat(userid, chinese_name, dept_ids)
+    user, created = get_or_create_user_from_wechat(
+        userid, chinese_name, dept_ids, corp=corp)
     if created:
         logger.info(f'新用户通过企微工作台登录: {chinese_name} ({user.username})')
 
@@ -186,6 +243,7 @@ def _wechat_code_login(request, code):
     request.session[SESSION_KEY] = user._meta.pk.value_to_string(user)
     request.session[BACKEND_SESSION_KEY] = settings.AUTHENTICATION_BACKENDS[0]
     request.session[HASH_SESSION_KEY] = user.get_session_auth_hash()
+    request.session[OAUTH_CORP_SESSION_KEY] = corp.code
     request.session.modified = True
 
     messages.success(request, f'欢迎, {user.first_name or user.username}!')
@@ -194,6 +252,7 @@ def _wechat_code_login(request, code):
 
 def wechat_login(request):
     """发起企业微信 OAuth 登录（/accounts/login/ 默认入口，wechat-login/ 保留旧入口）。"""
+    from accounts.wecom import default_corp
     if request.user.is_authenticated:
         next_url = request.session.pop(OAUTH_NEXT_SESSION_KEY, None)
         return redirect(next_url or 'kanban')
@@ -201,7 +260,7 @@ def wechat_login(request):
     next_url = _get_safe_next(request)
     if not next_url:
         next_url = request.session.get(OAUTH_NEXT_SESSION_KEY)
-    return redirect(_start_wecom_oauth(request, next_url))
+    return redirect(_start_wecom_oauth(request, default_corp(), next_url=next_url))
 
 
 # ========================================

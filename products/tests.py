@@ -1,8 +1,11 @@
 from io import BytesIO
 from datetime import timedelta
+from pathlib import Path
 from unittest.mock import patch
+import re
 
-from django.test import TestCase
+from django.conf import settings
+from django.test import SimpleTestCase, TestCase
 from django.contrib.auth.models import User
 from django.urls import reverse
 from django.utils import timezone
@@ -504,6 +507,135 @@ class ProductDeleteTest(TestCase):
         self.assertEqual(ProductStage.objects.filter(id__in=stage_ids).count(), 0)
 
 
+class TemplateCommentLintTest(SimpleTestCase):
+    """全项目模板扫一遍「多行 {# ... #}」—— 放在这里是因为这个坑是在本文件旁边的
+    _product_info.html 上踩出来的，但它对**所有**模板都成立。
+
+    Django 的注释正则是 `{#.*?#}` 且**没有 re.DOTALL**，`.` 不匹配换行，
+    所以跨行的 `{# ... #}` 压根不被当成注释，会被**原样输出到页面上**。
+    失败是静默的：页面照常渲染，只是多出一段注释文字，只有肉眼能发现。
+    多行注释必须写成 {% comment %} ... {% endcomment %}。
+    """
+
+    def test_no_multiline_hash_comments(self):
+        offenders = []
+        root = Path(settings.BASE_DIR, 'templates')
+        for path in sorted(root.rglob('*.html')):
+            text = path.read_text(encoding='utf-8')
+            for match in re.finditer(r'\{#', text):
+                end = text.find('#}', match.start())
+                if end == -1:
+                    continue
+                if '\n' in text[match.start():end]:
+                    line = text[:match.start()].count('\n') + 1
+                    offenders.append(f'{path.relative_to(settings.BASE_DIR)}:{line}')
+        self.assertEqual(
+            offenders, [],
+            '这些模板用了多行 {# #}，会被原样渲染到页面上，改用 {% comment %}：'
+            + '、'.join(offenders))
+
+
+class ProductDeleteButtonTest(TestCase):
+    """详情页上「删除该品」按钮的可见性。
+
+    最容易回归的一点：删除按钮**不能**和取消按钮共用同一个 status 判断。
+    两者绑一起的话，取消成功后按钮会和「取消该品」一起消失，就再也删不掉了 ——
+    而这个品恰恰是唯一允许被删除的状态。
+    """
+
+    def setUp(self):
+        self.dept = Department.objects.create(name='策划部')
+        self.admin = User.objects.create_user(username='admin', password='pass')
+        self.admin.profile.role = 'admin'
+        self.admin.profile.department = self.dept
+        self.admin.profile.save()
+        self.owner = User.objects.create_user(username='owner', password='pass')
+        self.owner.profile.department = self.dept
+        self.owner.profile.save()
+        self.outsider = User.objects.create_user(username='outsider', password='pass')
+        self.outsider.profile.department = self.dept
+        self.outsider.profile.save()
+
+        st = StageTemplate.objects.create(name='阶段1', order=1, department=self.dept)
+        TaskTemplate.objects.create(stage_template=st, name='任务A', order=1)
+
+    def _make_product(self, status, assignee=None):
+        product = Product.objects.create(
+            name=f'测试品-{status}', creator=self.admin, assignee=assignee, status=status,
+        )
+        product.create_stages_from_templates()
+        return product
+
+    def _detail(self, product, username):
+        self.client.login(username=username, password='pass')
+        return self.client.get(reverse('product_detail', args=[product.pk]))
+
+    def test_active_product_shows_both_buttons(self):
+        """进行中：两个按钮都在 —— 删除要先点一下被拒，才知道该先取消。"""
+        product = self._make_product('active', assignee=self.owner)
+        resp = self._detail(product, 'owner')
+        self.assertContains(resp, '取消该品')
+        self.assertContains(resp, '删除该品')
+
+    def test_cancelled_product_still_shows_delete_button(self):
+        """已取消：取消按钮该消失，删除按钮必须**留下** —— 否则取消完就删不掉了。"""
+        product = self._make_product('cancelled', assignee=self.owner)
+        resp = self._detail(product, 'owner')
+        self.assertNotContains(resp, '取消该品')
+        self.assertContains(resp, '删除该品')
+
+    def test_outsider_sees_no_action_buttons(self):
+        """外部人（既非管理员也非品负责人）不该看到这两个按钮。
+
+        can_manage 与删除接口的权限判断是同一个条件（is_admin or 品负责人），
+        所以这里看不到按钮的人，点了也只会拿到 403。
+        """
+        product = self._make_product('cancelled', assignee=self.owner)
+        resp = self._detail(product, 'outsider')
+        self.assertNotContains(resp, '删除该品')
+        self.assertNotContains(resp, '取消该品')
+
+    def test_template_comment_does_not_leak_into_the_page(self):
+        """模板注释里的文字不能出现在页面上。
+
+        多行 `{# ... #}` 不被 Django 当注释（见 TemplateCommentLintTest），
+        会被原样渲染 —— 页面照常打开，只是多出一段注释，肉眼不盯着看发现不了。
+        """
+        product = self._make_product('active', assignee=self.owner)
+        resp = self._detail(product, 'owner')
+        self.assertNotContains(resp, '操作按钮')
+        self.assertNotContains(resp, 'status 判断')
+
+    def test_info_modal_also_has_the_delete_button(self):
+        """同一份模板还供看板的信息弹窗用，两个入口都得有按钮。
+
+        弹窗才是主要入口（看板上点品名打开的就是它），只测详情页会漏掉真正的高频路径。
+        """
+        product = self._make_product('active', assignee=self.owner)
+        self.client.login(username='owner', password='pass')
+        resp = self.client.get(reverse('product_info_modal', args=[product.pk]))
+        self.assertContains(resp, '删除该品')
+        self.assertContains(resp, '取消该品')
+
+    def test_cancel_then_delete_succeeds(self):
+        """完整流程：进行中 → 直接删被拒 → 取消 → 删除成功。"""
+        product = self._make_product('active', assignee=self.owner)
+        self.client.login(username='owner', password='pass')
+
+        resp = self.client.post(reverse('product_delete', args=[product.pk]))
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('请先取消', resp.json()['error'])
+        self.assertTrue(Product.objects.filter(pk=product.pk).exists())
+
+        self.client.post(reverse('product_cancel', args=[product.pk]))
+        product.refresh_from_db()
+        self.assertEqual(product.status, 'cancelled')
+
+        resp = self.client.post(reverse('product_delete', args=[product.pk]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(Product.objects.filter(pk=product.pk).exists())
+
+
 class UpwardNotificationTriggerTest(TestCase):
     def setUp(self):
         self.dept = Department.objects.create(name='测试部门2')
@@ -526,17 +658,17 @@ class UpwardNotificationTriggerTest(TestCase):
             product_stage=self.stage, name='触发测试任务', assignee=self.task_assignee, order=1,
         )
 
-    @patch('reminders.upward_notify.send_wechat_message', return_value=True)
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
     def test_mark_completed_triggers_notify(self, mock_send):
         self.task.mark_completed()
         mock_send.assert_called_once()
 
-    @patch('reminders.upward_notify.send_wechat_message', return_value=True)
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
     def test_mark_overdue_triggers_notify(self, mock_send):
         self.task.mark_overdue()
         mock_send.assert_called_once()
 
-    @patch('reminders.upward_notify.send_wechat_message', return_value=True)
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
     def test_stage_complete_triggers_notify(self, mock_send):
         # 阶段下唯一任务先标记完成，再触发阶段完成
         self.task.mark_completed()
@@ -544,7 +676,7 @@ class UpwardNotificationTriggerTest(TestCase):
         self.stage.complete()
         mock_send.assert_called_once()
 
-    @patch('reminders.upward_notify.send_wechat_message', return_value=True)
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
     def test_last_stage_complete_triggers_product_notify_to_admins(self, mock_send):
         """品下所有阶段完成后，品自动置为 completed，应触发对所有管理员的 notify_upward。"""
         admin = User.objects.create(username='admin2', first_name='管理员2')

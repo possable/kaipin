@@ -1,0 +1,14 @@
+# 放到 /etc/systemd/system/kaipin-remind.timer
+# 启用：systemctl daemon-reload && systemctl enable --now kaipin-remind.timer
+
+[Unit]
+Description=每日触发 Kaipin 提醒扫描
+
+[Timer]
+OnCalendar=*-*-* 09:00:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=kaipin-remind.service
+
+[Install]
+WantedBy=timers.target

@@ -42,3 +42,6 @@ Thumbs.db
 # Intentionally keep the requested Linux virtual-environment snapshot.
 !venv/
 !venv/**
+
+# 数据库备份（mysqldump 产物，含全部业务数据，绝不入库）
+/backups/

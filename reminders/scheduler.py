@@ -6,8 +6,11 @@ from django.utils import timezone
 from products.models import Task, ProductStage, Product
 from activity_log.utils import log_action
 from .models import ReminderLog, UpwardNotifyLog
-from .upward_notify import notify_upward
-from .wechat import send_wechat_message
+from .upward_notify import (
+    notify_products_overdue_upward,
+    notify_stages_overdue_upward,
+)
+from .wechat import send_message_to_user
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +52,7 @@ def scan_and_remind():
         if not task.assignee:
             continue
 
-        wechat_id = task.assignee.profile.wechat_userid
-        if not wechat_id:
+        if not task.assignee.profile.wechat_userid:
             continue
 
         reminder_type = None
@@ -92,7 +94,7 @@ def scan_and_remind():
                 f'点击查看：{settings.SITE_URL}'
             )
 
-        success = send_wechat_message(wechat_id, content)
+        success = send_message_to_user(task.assignee, content)
         if success:
             ReminderLog.objects.create(task=task, reminder_type=reminder_type)
             if reminder_type == 'overdue':
@@ -109,6 +111,10 @@ def scan_and_remind():
     # ---- 阶段/品超期聚合检测：通知上一级负责人，按天去重 ----
 
     # 阶段超期：未完成阶段下存在超期任务 → 通知品总负责人
+    #
+    # 同样是先收集再按负责人聚合发送。品总负责人往往同时管好几个品、
+    # 每个品又可能有好几个阶段超期，逐条发就是一天七八条几乎一样的消息。
+    newly_overdue_stages = []
     for stage in ProductStage.objects.exclude(status='completed').select_related('product'):
         has_overdue_task = stage.tasks.filter(status='overdue').exists()
         if not has_overdue_task:
@@ -119,16 +125,31 @@ def scan_and_remind():
         ).exists()
         if already_sent:
             continue
-        notify_upward(stage, 'overdue')
+        newly_overdue_stages.append(stage)
         try:
             UpwardNotifyLog.objects.create(
                 content_type_label='stage', object_id=stage.pk,
                 event_type='overdue', sent_date=today,
             )
         except IntegrityError:
-            pass  # 并发下已有兄弟进程写入，忽略
+            newly_overdue_stages.pop()
+            continue
+
+    if newly_overdue_stages:
+        try:
+            notify_stages_overdue_upward(newly_overdue_stages)
+        except Exception:
+            logger.exception('阶段超期聚合通知失败')
 
     # 品超期：未完成/未取消的品下存在超期阶段（未完成阶段含超期任务） → 通知所有管理员
+    #
+    # 这里**先收集再一次性发送**：原先是逐品调用 notify_upward(product, ...)，
+    # 每个管理员每个超期品各收一条，6 个品超期就是 6 条几乎一样的消息、且每天重复。
+    # 改成把当天新超期的品聚合成一条「你有 N 个品超期」。
+    #
+    # UpwardNotifyLog 仍然**逐品**写：它是按 (label, object_id, event_type, date) 去重的，
+    # 逐品写才能保证「今天已经通知过的品」明天不会再被算进来。
+    newly_overdue = []
     for product in Product.objects.exclude(status__in=['completed', 'cancelled']):
         has_overdue_stage = product.stages.exclude(status='completed').filter(
             tasks__status='overdue'
@@ -141,45 +162,27 @@ def scan_and_remind():
         ).exists()
         if already_sent:
             continue
-        notify_upward(product, 'overdue')
+        newly_overdue.append(product)
         try:
             UpwardNotifyLog.objects.create(
                 content_type_label='product', object_id=product.pk,
                 event_type='overdue', sent_date=today,
             )
         except IntegrityError:
-            pass  # 并发下已有兄弟进程写入，忽略
+            # 并发下已有兄弟进程写入 —— 但对方也是同一个计时器触发的，
+            # 把它从本次聚合里去掉，避免同一条消息里重复列出同一个品
+            newly_overdue.pop()
+            continue
+
+    if newly_overdue:
+        try:
+            notify_products_overdue_upward(newly_overdue)
+        except Exception:
+            logger.exception('品超期聚合通知失败')
 
     return sent_count
 
 
-from django.core.management import call_command
-from apscheduler.schedulers.background import BackgroundScheduler
-
-_scheduler = None
-
-
-def start_scheduler():
-    """在 Django 应用就绪时调用，启动后台调度器"""
-    global _scheduler
-    if _scheduler is not None:
-        return
-    _scheduler = BackgroundScheduler()
-    _scheduler.add_job(
-        lambda: call_command('sync_wechat_org'),
-        'cron',
-        hour=8,
-        minute=0,
-        id='daily_sync_wechat',
-        replace_existing=True,
-    )
-    _scheduler.add_job(
-        scan_and_remind,
-        'cron',
-        hour=9,
-        minute=0,
-        id='daily_reminder',
-        replace_existing=True,
-    )
-    _scheduler.start()
-    logger.info('APScheduler 已启动，每日 08:00 同步组织架构，09:00 执行提醒扫描')
+# 调度器已移出进程：改由 systemd timer 触发 `manage.py scan_reminders`
+# 和 `manage.py sync_wechat_org`。原因见 reminders/apps.py 顶部注释。
+# 不要再往这里加 APScheduler —— gunicorn --workers 3 会让每个 worker 各跑一份。

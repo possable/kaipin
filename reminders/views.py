@@ -5,7 +5,7 @@ from django.views.decorators.http import require_POST
 from products.models import Product, ProductStage, Task
 from products.views import _check_task_permission
 from activity_log.utils import log_action
-from .wechat import send_wechat_message
+from .wechat import send_message_to_user
 
 ENTITY_MODELS = {
     'product': Product,
@@ -41,8 +41,7 @@ def send_message(request, entity_type, entity_id):
     if not _can_message_entity(request.user, entity_type, entity):
         return JsonResponse({'error': '无权限对此负责人发消息'}, status=403)
 
-    wechat_id = target.profile.wechat_userid
-    if not wechat_id:
+    if not target.profile.wechat_userid:
         return JsonResponse({'error': '该用户尚未绑定企业微信，无法发送'}, status=400)
 
     content = request.POST.get('content', '').strip()
@@ -52,7 +51,8 @@ def send_message(request, entity_type, entity_id):
     sender_name = request.user.first_name or request.user.username
     full_content = f'{sender_name} 在产品管理系统给你留言：\n{content}'
 
-    success = send_wechat_message(wechat_id, full_content)
+    # 按收件人所在企业发送（他用哪个企业的企微，就得用哪个企业的应用发）
+    success = send_message_to_user(target, full_content)
     if not success:
         return JsonResponse({'error': '发送失败，请稍后重试'}, status=502)
 
