@@ -68,7 +68,7 @@ def kanban(request):
 
     products = products.prefetch_related('stages__tasks')
 
-    # 关键词模糊搜索：品名、产品名称、品牌、上架平台
+    # 关键词模糊搜索：品名、产品名称、项目分类、上架平台
     if q:
         products = products.filter(
             Q(name__icontains=q)
