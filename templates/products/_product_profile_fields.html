@@ -6,7 +6,13 @@
     </div>
     <div class="col-md-6">
         <label class="form-label">项目分类</label>
-        <input type="text" name="brand" class="form-input" value="{{ product.brand|default:'' }}">
+        <input type="text" name="brand" class="form-input" list="project-category-options"
+               value="{{ product.brand|default:'' }}">
+        <datalist id="project-category-options">
+            {% for value, label in project_category_choices %}
+            <option value="{{ value }}">{{ label }}</option>
+            {% endfor %}
+        </datalist>
     </div>
     <div class="col-md-6">
         <label class="form-label">上架平台</label>

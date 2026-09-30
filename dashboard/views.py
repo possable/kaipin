@@ -49,6 +49,7 @@ def kanban(request):
     assignee_id = request.GET.get('assignee', '').strip()
     status_filter = request.GET.get('status', 'all')
     category_filter = request.GET.get('category', '').strip()
+    brand_filter = request.GET.get('brand', '').strip()
     time_type = request.GET.get('time_type', '').strip()
     date_from = request.GET.get('date_from', '').strip()
     date_to = request.GET.get('date_to', '').strip()
@@ -80,6 +81,10 @@ def kanban(request):
     # 按所属类目筛选
     if category_filter:
         products = products.filter(category=category_filter)
+
+    # 按项目分类筛选
+    if brand_filter:
+        products = products.filter(brand=brand_filter)
 
     # 按选定时间类型范围筛选
     if time_type == 'created' and (date_from or date_to):
@@ -121,7 +126,7 @@ def kanban(request):
     )
 
     # 判断是否有筛选条件激活
-    has_filter = bool(q or assignee_id or category_filter or date_from or date_to)
+    has_filter = bool(q or assignee_id or category_filter or brand_filter or date_from or date_to)
 
     # 构建统一的产品列表
     products_flat = []
@@ -200,6 +205,7 @@ def kanban(request):
         'filter_assignee': assignee_id,
         'filter_assignee_name': assignee_name,
         'filter_category': category_filter,
+        'filter_brand': brand_filter,
         'filter_time_type': time_type,
         'filter_date_from': date_from,
         'filter_date_to': date_to,

@@ -73,6 +73,15 @@
             {% endfor %}
         </select>
     </div>
+    <div class="field">
+        <label>项目分类</label>
+        <select name="brand" class="control">
+            <option value="">全部</option>
+            {% for value, label in project_category_choices %}
+            <option value="{{ value }}" {% if filter_brand == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+    </div>
     <div class="field" style="min-width:200px;">
         <label>时间筛选</label>
         <div style="display:flex;gap:4px;align-items:center;">
@@ -206,10 +215,10 @@
         <span class="page-info">共 {{ page_obj.paginator.count }} 条，第 {{ page_obj.number }}/{{ page_obj.paginator.num_pages }} 页</span>
         <div class="page-btns">
             {% if page_obj.has_previous %}
-            <a href="?page={{ page_obj.previous_page_number }}{% if search_q %}&q={{ search_q }}{% endif %}{% if filter_assignee %}&assignee={{ filter_assignee }}{% endif %}{% if status_filter != 'all' %}&status={{ status_filter }}{% endif %}{% if filter_category %}&category={{ filter_category }}{% endif %}{% if filter_time_type %}&time_type={{ filter_time_type }}{% endif %}{% if filter_date_from %}&date_from={{ filter_date_from }}{% endif %}{% if filter_date_to %}&date_to={{ filter_date_to }}{% endif %}" class="page-btn">‹ 上一页</a>
+            <a href="?page={{ page_obj.previous_page_number }}{% if search_q %}&q={{ search_q }}{% endif %}{% if filter_assignee %}&assignee={{ filter_assignee }}{% endif %}{% if status_filter != 'all' %}&status={{ status_filter }}{% endif %}{% if filter_category %}&category={{ filter_category }}{% endif %}{% if filter_brand %}&brand={{ filter_brand }}{% endif %}{% if filter_time_type %}&time_type={{ filter_time_type }}{% endif %}{% if filter_date_from %}&date_from={{ filter_date_from }}{% endif %}{% if filter_date_to %}&date_to={{ filter_date_to }}{% endif %}" class="page-btn">‹ 上一页</a>
             {% endif %}
             {% if page_obj.has_next %}
-            <a href="?page={{ page_obj.next_page_number }}{% if search_q %}&q={{ search_q }}{% endif %}{% if filter_assignee %}&assignee={{ filter_assignee }}{% endif %}{% if status_filter != 'all' %}&status={{ status_filter }}{% endif %}{% if filter_category %}&category={{ filter_category }}{% endif %}{% if filter_time_type %}&time_type={{ filter_time_type }}{% endif %}{% if filter_date_from %}&date_from={{ filter_date_from }}{% endif %}{% if filter_date_to %}&date_to={{ filter_date_to }}{% endif %}" class="page-btn">下一页 ›</a>
+            <a href="?page={{ page_obj.next_page_number }}{% if search_q %}&q={{ search_q }}{% endif %}{% if filter_assignee %}&assignee={{ filter_assignee }}{% endif %}{% if status_filter != 'all' %}&status={{ status_filter }}{% endif %}{% if filter_category %}&category={{ filter_category }}{% endif %}{% if filter_brand %}&brand={{ filter_brand }}{% endif %}{% if filter_time_type %}&time_type={{ filter_time_type }}{% endif %}{% if filter_date_from %}&date_from={{ filter_date_from }}{% endif %}{% if filter_date_to %}&date_to={{ filter_date_to }}{% endif %}" class="page-btn">下一页 ›</a>
             {% endif %}
         </div>
     </div>
@@ -288,7 +297,7 @@ const ALL_USERS = [{% for u in all_users %}{id:{{u.id}},name:"{{u.first_name|def
 (function rememberKanbanFilters() {
     const LS_KEY = 'kanban_filters_v1';
     const urlParams = new URLSearchParams(location.search);
-    const hasAnyParam = ['q','assignee','status','category','time_type','date_from','date_to','page'].some(k => urlParams.has(k));
+    const hasAnyParam = ['q','assignee','status','category','brand','time_type','date_from','date_to','page'].some(k => urlParams.has(k));
 
     if (!hasAnyParam) {
         try {

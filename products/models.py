@@ -56,6 +56,11 @@ def compute_task_color(task):
 PROJECT_TYPE_CHOICES = [
     ('老品迭代', '老品迭代'),
     ('新品开发', '新品开发'),
+]
+
+# 项目分类选项（三个渠道分类，2026-09 从项目类型里挪出来）
+# 注：brand 字段不设 choices，保留自由填写，datalist 只作候选提示
+PROJECT_CATEGORY_CHOICES = [
     ('跨境自营', '跨境自营'),
     ('京东京造', '京东京造'),
     ('内地自营（含大贸）', '内地自营（含大贸）'),
