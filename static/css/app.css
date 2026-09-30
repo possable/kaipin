@@ -3039,7 +3039,11 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
     #product-modal-overlay[data-modal-mode="progress"] .project-risk-list {
         min-height: 0;
         flex: 1 1 auto;
-        grid-template-columns: repeat(auto-fit, minmax(390px, 1fr));
+        /* 轨道下限必须 >= 卡片自身的最小宽度，否则 auto-fit 排出的列会窄于卡片内部
+           网格所需的宽度：里程碑名被 ellipsis 截断，右侧几列溢出后被 overflow:hidden 裁掉。
+           卡片最小宽度 = 32+150+76+104+68 (列) + 4*9 (gap) + 2*10 (padding) = 486px，
+           这里取 520px 留出余量，不要再调小。 */
+        grid-template-columns: repeat(auto-fit, minmax(520px, 1fr));
         grid-auto-rows: minmax(0, 1fr);
         align-items: stretch;
         gap: 8px;
