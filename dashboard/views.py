@@ -111,8 +111,9 @@ def kanban(request):
         except (ValueError, TypeError):
             assignee_id = ''
 
-    # 获取阶段模板用于排序
-    stage_templates = StageTemplate.objects.all()
+    # 获取阶段模板用于排序；最后一环（上架归档）同时是已完成项目的归属栏
+    stage_templates_ordered = list(StageTemplate.objects.order_by('order'))
+    archive_stage_name = stage_templates_ordered[-1].name if stage_templates_ordered else ''
 
     # 获取所有用户供负责人下拉列表
     all_users = User.objects.select_related('profile').order_by(
@@ -147,6 +148,9 @@ def kanban(request):
     # KPI 阶段筛选：点击 KPI 卡片跳转过来时只显示当前处于该阶段的活跃项目
     if stage_filter:
         def _matches_stage(p):
+            if p.get('product_status') == 'completed':
+                # 已完成项目归入上架归档，点这张卡片时一并显示，与卡片上的数字保持一致
+                return stage_filter == archive_stage_name
             if p.get('product_status') != 'active':
                 return False
             for s in p.get('all_stages', []):
@@ -155,19 +159,24 @@ def kanban(request):
             return False
         products_flat = [p for p in products_flat if _matches_stage(p)]
 
-    # 按阶段顺序排序
-    stage_order = {st.order: i for i, st in enumerate(stage_templates)}
-    products_flat.sort(key=lambda p: stage_order.get(p.get('_stage_order', 0), 999))
+    # 按阶段顺序排序；已完成的项目统一排到所有项目后面
+    stage_order = {st.order: i for i, st in enumerate(stage_templates_ordered)}
+    products_flat.sort(key=lambda p: (
+        p.get('product_status') == 'completed',
+        stage_order.get(p.get('_stage_order', 0), 999),
+    ))
 
-    # KPI 统计：按阶段模板动态生成卡片，统计当前处于该阶段的活跃项目数
+    # KPI 统计：按阶段模板动态生成卡片，统计当前处于该阶段的活跃项目数；
+    # 已完成的项目没有进行中阶段，统一计入最后一环（上架归档）
     kpi_total = visible_products_for(request.user).count()
-    stage_templates_ordered = list(StageTemplate.objects.order_by('order'))
     stage_counts = {st.name: 0 for st in stage_templates_ordered}
     for p in products_flat:
         if p.get('product_status') == 'active':
             for s in p.get('all_stages', []):
                 if s.get('status') in ('in_progress', 'overdue') and s['name'] in stage_counts:
                     stage_counts[s['name']] += 1
+        elif p.get('product_status') == 'completed' and archive_stage_name in stage_counts:
+            stage_counts[archive_stage_name] += 1
     stage_infos = [
         {
             'name': st.name,

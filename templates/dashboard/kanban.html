@@ -28,7 +28,7 @@
         <div class="kpi-icon"><i class="bi {{ si.icon }}"></i></div>
         <div class="kpi-title">{{ si.name }}</div>
         <div class="kpi-num">{{ si.count }}</div>
-        <div class="kpi-foot">进行中</div>
+        <div class="kpi-foot">{% if forloop.last %}进行中/已完成{% else %}进行中{% endif %}</div>
     </a>
     {% endfor %}
 </section>
@@ -68,8 +68,9 @@
         <label>项目类型</label>
         <select name="category" class="control">
             <option value="">全部</option>
-            <option value="老品迭代" {% if filter_category == '老品迭代' %}selected{% endif %}>老品迭代</option>
-            <option value="新品开发" {% if filter_category == '新品开发' %}selected{% endif %}>新品开发</option>
+            {% for value, label in project_type_choices %}
+            <option value="{{ value }}" {% if filter_category == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
         </select>
     </div>
     <div class="field" style="min-width:200px;">

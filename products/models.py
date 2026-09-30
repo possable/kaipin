@@ -52,6 +52,16 @@ def compute_task_color(task):
     return 'gray'
 
 
+# 项目类型选项（原先散落在看板筛选栏和产品资料表单里，统一到这里）
+PROJECT_TYPE_CHOICES = [
+    ('老品迭代', '老品迭代'),
+    ('新品开发', '新品开发'),
+    ('跨境自营', '跨境自营'),
+    ('京东京造', '京东京造'),
+    ('内地自营（含大贸）', '内地自营（含大贸）'),
+]
+
+
 class Product(models.Model):
     """品（新品开发项目）"""
     STATUS_CHOICES = [
@@ -66,7 +76,9 @@ class Product(models.Model):
     product_name = models.CharField(max_length=200, blank=True, verbose_name='产品名称')
     brand = models.CharField(max_length=100, blank=True, verbose_name='品牌')
     platforms = models.CharField(max_length=200, blank=True, verbose_name='上架平台')
-    category = models.CharField(max_length=100, blank=True, verbose_name='所属类目')
+    category = models.CharField(
+        max_length=100, blank=True, choices=PROJECT_TYPE_CHOICES, verbose_name='项目类型'
+    )
     positioning = models.CharField(max_length=200, blank=True, verbose_name='产品定位')
     dosage_form = models.CharField(max_length=100, blank=True, verbose_name='剂型')
     specification = models.CharField(max_length=200, blank=True, verbose_name='规格')

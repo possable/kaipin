@@ -239,8 +239,12 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
 .table-panel table { width: 100%; border-collapse: collapse; }
 .table-panel thead { background: rgba(10,28,39,.66); border-bottom: 1px solid var(--line2); }
 .table-panel th { font-size: 12px; font-weight: 500; color: #c2cbcf; text-align: left; padding: 14px; }
-.table-panel tbody tr { border-bottom: 1px solid rgba(136,160,174,.10); transition: .12s; }
-.table-panel tbody tr:hover { background: rgba(255,255,255,.018); }
+.table-panel tbody tr { border-bottom: 1px solid rgba(136,160,174,.10); transition: background .12s, opacity .12s; }
+/* 悬停高亮：当前行加绿色底 + 左侧色条并提亮文字，其余行压暗，把对比度拉开 */
+.table-panel tbody:hover tr:not(:hover) { opacity: .5; }
+.table-panel tbody tr:hover { background: rgba(0,232,119,.07); }
+.table-panel tbody tr:hover td { color: #f2f6f7; }
+.table-panel tbody tr:hover td:first-child { box-shadow: inset 3px 0 0 var(--green); }
 .table-panel td { font-size: 13px; color: #dce1e3; padding: 14px; vertical-align: middle; overflow: visible; }
 .table-panel .project-name { font-size: 14px; font-weight: 600; color: var(--text); cursor: pointer; background: none; border: none; text-align: left; padding: 0; }
 .table-panel .project-name:hover { color: var(--green); }

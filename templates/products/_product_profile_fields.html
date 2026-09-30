@@ -13,8 +13,13 @@
         <input type="text" name="platforms" class="form-input" placeholder="如：天猫、抖音" value="{{ product.platforms|default:'' }}">
     </div>
     <div class="col-md-6">
-        <label class="form-label">所属类目</label>
-        <input type="text" name="category" class="form-input" value="{{ product.category|default:'' }}">
+        <label class="form-label">项目类型</label>
+        <select name="category" class="form-input">
+            <option value="">未设置</option>
+            {% for value, label in project_type_choices %}
+            <option value="{{ value }}" {% if product.category == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
     </div>
     <div class="col-md-6">
         <label class="form-label">产品定位</label>
