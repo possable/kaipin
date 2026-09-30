@@ -219,6 +219,26 @@ def kanban(request):
     })
 
 
+def _can_delete_product(product, user):
+    """能不能彻底删除这个品：进行中的不能删（要先取消），其余看管理权限。
+
+    看板和上架归档都走这一处，免得两个页面的删除按钮出现不一样的判断。
+    """
+    return product.status != 'active' and product.can_be_managed_by(user)
+
+
+def _product_duration_days(product):
+    """从开始到实际完成过了多少天。缺任一端返回 None，模板显示 --。
+
+    先 tz.localtime 再取日期，与列表里显示的日期口径一致（看板也是这么转的）。
+    """
+    if not product.started_at or not product.actual_end_date:
+        return None
+    start = tz.localtime(product.started_at).date()
+    end = tz.localtime(product.actual_end_date).date()
+    return (end - start).days
+
+
 def _build_product_item(request, product):
     """构建统一的看板行数据，适用于所有状态的产品"""
     can_message_product = (
@@ -398,10 +418,8 @@ def _build_product_item(request, product):
         'has_overdue': has_overdue,
         'block_reason': block_reason,
         'block_person': block_person,
-        'can_delete': product.status != 'active' and product.can_be_managed_by(request.user),
+        'can_delete': _can_delete_product(product, request.user),
         'product_status': product.status,
-        # 只有「上架归档」页会显示它（看板用不到，但共用一个构建函数就一起给了）
-        'actual_end_date': product.actual_end_date,
         '_stage_order': current.order if current else 0,
     }
 
@@ -473,26 +491,114 @@ def export_csv(request):
 
 @login_required
 def archive(request):
-    """上架归档：已完成的项目。
+    """上架归档：已完成的项目，表格 + 筛选。
 
     项目变 completed 没有专门的按钮 —— 最后一个阶段被标记完成时由
     ProductStage.complete() 自动置位（products/models.py），所以「完成即归档」
     是自然衔接的。看板那边用 _kanban_products_for() 把已完成排除掉，
     两张页面的可见性规则保持一致（普通成员只看到自己相关的项目）。
+
+    这里没有复用 _build_product_item：那个函数主要是为了算阶段进度和超期，
+    已完成的项目一个进行中阶段都没有，算出来全是恒定的空值，白跑一遍任务遍历。
     """
+    q = request.GET.get('q', '').strip()
+    assignee_id = request.GET.get('assignee', '').strip()
+    brand_filter = request.GET.get('brand', '').strip()
+    category_filter = request.GET.get('category', '').strip()
+    date_from = request.GET.get('date_from', '').strip()
+    date_to = request.GET.get('date_to', '').strip()
+
     products = (
         visible_products_for(request.user)
         .filter(status='completed')
-        .select_related('assignee__profile__department')
-        .prefetch_related(
-            'stages__department', 'stages__assignee__profile__department',
-            'stages__tasks__assignee__profile',
-        )
+        .select_related('assignee')
         # 最近完成的排前面；actual_end_date 理论上都有值（complete() 里写的），
         # 兜个底免得 NULL 在 PostgreSQL 的 DESC 下反而排到最前
         .order_by(F('actual_end_date').desc(nulls_last=True), '-created_at')
     )
 
+    # 关键词模糊搜索：品名、产品名称、项目分类、上架平台（与看板同一套字段）
+    if q:
+        products = products.filter(
+            Q(name__icontains=q)
+            | Q(product_name__icontains=q)
+            | Q(brand__icontains=q)
+            | Q(platforms__icontains=q)
+        )
+
+    if brand_filter:
+        products = products.filter(brand=brand_filter)
+
+    if category_filter:
+        products = products.filter(category=category_filter)
+
+    assignee_name = ''
+    if assignee_id:
+        try:
+            assignee_id_int = int(assignee_id)
+        except (ValueError, TypeError):
+            assignee_id = ''
+        else:
+            products = products.filter(assignee_id=assignee_id_int)
+            assignee_user = User.objects.filter(pk=assignee_id_int).first()
+            if assignee_user:
+                assignee_name = assignee_user.first_name or assignee_user.username
+
+    # 完成时间范围。这里绝对不能用 __date 查询 —— 这台 MySQL 没加载时区表，
+    # Django 会把 __date 翻译成 DATE(CONVERT_TZ(col,'UTC','Asia/Shanghai'))，
+    # 而 CONVERT_TZ 在时区表缺失时返回 NULL，结果是恒不匹配、还不报错。
+    # 所以照看板筛创建时间的写法，按本地日期算出 aware 边界再比大小：
+    # date_from 取当天 00:00 起，date_to 取次日 00:00 前，当天整日都算在内。
+    if date_from:
+        try:
+            d = datetime.strptime(date_from, '%Y-%m-%d').date()
+            products = products.filter(
+                actual_end_date__gte=tz.make_aware(datetime.combine(d, datetime.min.time()))
+            )
+        except ValueError:
+            date_from = ''
+    if date_to:
+        try:
+            d = datetime.strptime(date_to, '%Y-%m-%d').date() + timedelta(days=1)
+            products = products.filter(
+                actual_end_date__lt=tz.make_aware(datetime.combine(d, datetime.min.time()))
+            )
+        except ValueError:
+            date_to = ''
+
+    rows = [
+        {
+            'id': p.id,
+            'name': p.name,
+            'brand': p.brand,
+            'category': p.category,
+            'assignee': (p.assignee.first_name or p.assignee.username) if p.assignee else '',
+            'assignee_inactive': bool(p.assignee and not p.assignee.is_active),
+            'start_date': tz.localtime(p.started_at).date() if p.started_at else None,
+            'end_date': tz.localtime(p.actual_end_date) if p.actual_end_date else None,
+            'duration_days': _product_duration_days(p),
+            'can_delete': _can_delete_product(p, request.user),
+        }
+        for p in products
+    ]
+
+    page_obj = Paginator(rows, PROJECTS_PER_PAGE).get_page(request.GET.get('page', '1'))
+
     return render(request, 'dashboard/archive.html', {
-        'completed_products': [_build_product_item(request, p) for p in products],
+        'products': page_obj,
+        'page_obj': page_obj,
+        'has_products': bool(rows),
+        'has_filter': bool(
+            q or assignee_id or brand_filter or category_filter or date_from or date_to
+        ),
+        'all_users': User.objects.select_related('profile').order_by(
+            '-is_active', 'first_name', 'username'
+        ),
+        'search_q': q,
+        'filter_assignee': assignee_id,
+        'filter_assignee_name': assignee_name,
+        'filter_brand': brand_filter,
+        'filter_category': category_filter,
+        'filter_date_from': date_from,
+        'filter_date_to': date_to,
     })

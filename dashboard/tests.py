@@ -1,6 +1,9 @@
+from datetime import timedelta
+
 from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from products.models import Product
 
@@ -74,7 +77,7 @@ class ArchiveViewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
-            [p['name'] for p in response.context['completed_products']],
+            [p['name'] for p in response.context['products']],
             ['已完成的品'],
         )
 
@@ -102,4 +105,52 @@ class ArchiveViewTests(TestCase):
         response = self.client.get(reverse('archive'))
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context['completed_products'], [])
+        self.assertEqual(list(response.context['products']), [])
+
+    def test_completion_date_filter_covers_the_whole_day(self):
+        """完成时间按自然日筛，当天要算在内。
+
+        回归点：这里不能用 __date 查询。这台 MySQL 没加载时区表，Django 会把
+        __date 翻译成 DATE(CONVERT_TZ(col,'UTC','Asia/Shanghai'))，而 CONVERT_TZ
+        在时区表缺失时返回 NULL —— 不报错，但一条都匹配不到。
+        """
+        self.completed.actual_end_date = timezone.now()
+        self.completed.save()
+        completed_on = timezone.localtime(self.completed.actual_end_date).date()
+        self.client.force_login(self.admin)
+
+        same_day = self.client.get(reverse('archive'), {
+            'date_from': completed_on.isoformat(),
+            'date_to': completed_on.isoformat(),
+        })
+        self.assertEqual([p['name'] for p in same_day.context['products']], ['已完成的品'])
+
+        day_after = (completed_on + timedelta(days=1)).isoformat()
+        too_late = self.client.get(reverse('archive'), {'date_from': day_after})
+        self.assertEqual(list(too_late.context['products']), [])
+
+    def test_invalid_filter_values_do_not_break_the_page(self):
+        self.client.force_login(self.admin)
+
+        response = self.client.get(reverse('archive'), {
+            'date_from': 'not-a-date',
+            'date_to': '2026-13-45',
+            'assignee': 'not-an-int',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [p['name'] for p in response.context['products']],
+            ['已完成的品'],
+        )
+
+    def test_duration_days_counts_from_start_to_finish(self):
+        start = timezone.now() - timedelta(days=30)
+        self.completed.started_at = start
+        self.completed.actual_end_date = start + timedelta(days=12)
+        self.completed.save()
+        self.client.force_login(self.admin)
+
+        response = self.client.get(reverse('archive'))
+
+        self.assertEqual(response.context['products'][0]['duration_days'], 12)

@@ -8,41 +8,155 @@
     </div>
 </div>
 
-{% if completed_products %}
-<div class="archive-section">
-    <div style="display:flex;align-items:center;justify-content:space-between;">
-        <h4><i class="bi bi-check2-circle" style="color:var(--green);"></i> 已完成（{{ completed_products|length }}）</h4>
-        <a href="{% url 'export_csv' %}?status=completed" class="btn btn-outline btn-sm">
-            <i class="bi bi-download"></i> 导出 CSV
-        </a>
+<!-- 筛选栏 -->
+<form method="get" class="filterbar">
+    <div class="field">
+        <label>关键词搜索</label>
+        <input type="text" name="q" class="control" placeholder="品名/产品名/项目分类..."
+               value="{{ search_q }}">
     </div>
-    <div class="archive-grid">
-        {% for p in completed_products %}
-        <a href="{% url 'product_detail' p.id %}" class="archive-card">
-            <strong>{{ p.name }}</strong>
-            {% if p.can_delete %}
-            <button type="button" class="archive-delete-btn" title="彻底删除"
-                    onclick="event.preventDefault();event.stopPropagation();deleteArchivedProduct({{ p.id }}, '{{ p.name|escapejs }}', this)">
-                <i class="bi bi-trash"></i>
-            </button>
-            {% endif %}
-            <span class="archive-meta">
-                {{ p.product_assignee|default:'未指定负责人' }}{% if p.actual_end_date %} · {{ p.actual_end_date|date:'Y-m-d' }} 完成{% endif %}
+    <div class="field">
+        <label>负责人</label>
+        <input type="text" class="control user-search" list="users-datalist" id="assignee-input"
+               placeholder="搜索..." autocomplete="off"
+               value="{% if filter_assignee %}{{ filter_assignee_name }}{% endif %}"
+               data-userid="{{ filter_assignee }}">
+        <input type="hidden" name="assignee" id="assignee-hidden" value="{{ filter_assignee }}">
+        <datalist id="users-datalist">
+            {% for u in all_users %}
+            <option value="{{ u.first_name|default:u.username }}{% if not u.is_active %} (已离职){% endif %}" data-id="{{ u.id }}">
+            {% endfor %}
+        </datalist>
+    </div>
+    <div class="field">
+        <label>项目分类</label>
+        <select name="brand" class="control">
+            <option value="">全部</option>
+            {% for value, label in project_category_choices %}
+            <option value="{{ value }}" {% if filter_brand == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="field">
+        <label>项目类型</label>
+        <select name="category" class="control">
+            <option value="">全部</option>
+            {% for value, label in project_type_choices %}
+            <option value="{{ value }}" {% if filter_category == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="field" style="min-width:200px;">
+        <label>完成时间</label>
+        <div style="display:flex;gap:4px;align-items:center;">
+            <input type="date" name="date_from" class="control" value="{{ filter_date_from }}" style="padding:0 6px;">
+            <span style="color:var(--muted);flex-shrink:0;">至</span>
+            <input type="date" name="date_to" class="control" value="{{ filter_date_to }}" style="padding:0 6px;">
+        </div>
+    </div>
+    <div class="field" style="flex:0;display:flex;gap:8px;align-items:flex-end;margin-left:2cm;">
+        <button type="submit" class="btn-search">搜索</button>
+        {% if has_filter %}
+        <a href="{% url 'archive' %}" class="btn-reset">重置</a>
+        {% endif %}
+    </div>
+</form>
+
+<section class="table-panel">
+    <table>
+    <colgroup>
+        <col style="width:200px"><col style="width:110px"><col style="width:90px">
+        <col style="width:80px"><col style="width:95px"><col style="width:95px">
+        <col style="width:70px"><col style="width:55px"><col style="width:55px">
+    </colgroup>
+    <thead><tr>
+        <th>项目名称</th><th>项目分类</th><th>项目类型</th>
+        <th>负责人</th><th>开始时间</th><th>完成时间</th><th>用时</th>
+        <th>详情</th><th>导出</th>
+    </tr></thead>
+    <tbody>
+    {% for p in products %}
+    <tr>
+        <td>
+            <button type="button" class="project-name" onclick="event.stopPropagation();openProductProgressModal({{ p.id }}, '{{ p.name|escapejs }}')">{{ p.name }}</button>
+        </td>
+        <td>{{ p.brand|default:'--' }}</td>
+        <td>{{ p.category|default:'--' }}</td>
+        <td>
+            <span class="{% if p.assignee_inactive %}user-inactive{% endif %}"
+                  title="{% if p.assignee_inactive %}该员工已离职{% endif %}">
+                {{ p.assignee|default:'--' }}{% if p.assignee_inactive %}（已离职）{% endif %}
             </span>
-        </a>
-        {% endfor %}
+        </td>
+        <td>{{ p.start_date|date:'Y-m-d'|default:'-------------' }}</td>
+        <td>{{ p.end_date|date:'Y-m-d'|default:'-------------' }}</td>
+        <td>{% if p.duration_days is not None %}{{ p.duration_days }} 天{% else %}--{% endif %}</td>
+        <td class="actions-cell">
+            <div class="actions-row">
+                <button type="button" class="kanban-action-btn" title="查看详情" onclick="event.stopPropagation();openProductModal({{ p.id }}, '{{ p.name|escapejs }}')"><i class="bi bi-eye"></i></button>
+            </div>
+        </td>
+        <td class="actions-cell">
+            <div class="actions-row">
+                <a href="{% url 'export_csv' %}?product={{ p.id }}" class="kanban-action-btn" title="导出" onclick="event.stopPropagation()"><i class="bi bi-download"></i></a>
+            </div>
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+    </table>
+
+    {% if not has_products %}
+    <div class="empty-state">
+        <i class="bi bi-archive"></i>
+        <p>{% if has_filter %}没有符合条件的归档项目{% else %}还没有已上架归档的项目{% endif %}</p>
+        {% if has_filter %}
+        <p style="margin-top:8px;font-size:12px;">尝试 <a href="{% url 'archive' %}" style="color:var(--green);">清除筛选</a> 查看全部</p>
+        {% else %}
+        <p style="margin-top:8px;font-size:12px;">最后一个阶段完成时，项目会自动归档到这里</p>
+        {% endif %}
     </div>
-</div>
-{% else %}
-<div class="empty-state">
-    <i class="bi bi-archive"></i>
-    <p>还没有已上架归档的项目</p>
-    <p style="margin-top:8px;font-size:12px;">最后一个阶段完成时，项目会自动归档到这里</p>
-</div>
-{% endif %}
+    {% endif %}
+
+    {% if page_obj.paginator.num_pages > 1 %}
+    <div class="pagination-bar">
+        <span class="page-info">共 {{ page_obj.paginator.count }} 条，第 {{ page_obj.number }}/{{ page_obj.paginator.num_pages }} 页</span>
+        <div class="page-btns">
+            {% if page_obj.has_previous %}
+            <a href="?page={{ page_obj.previous_page_number }}{% if search_q %}&q={{ search_q }}{% endif %}{% if filter_assignee %}&assignee={{ filter_assignee }}{% endif %}{% if filter_brand %}&brand={{ filter_brand }}{% endif %}{% if filter_category %}&category={{ filter_category }}{% endif %}{% if filter_date_from %}&date_from={{ filter_date_from }}{% endif %}{% if filter_date_to %}&date_to={{ filter_date_to }}{% endif %}" class="page-btn">‹ 上一页</a>
+            {% endif %}
+            {% if page_obj.has_next %}
+            <a href="?page={{ page_obj.next_page_number }}{% if search_q %}&q={{ search_q }}{% endif %}{% if filter_assignee %}&assignee={{ filter_assignee }}{% endif %}{% if filter_brand %}&brand={{ filter_brand }}{% endif %}{% if filter_category %}&category={{ filter_category }}{% endif %}{% if filter_date_from %}&date_from={{ filter_date_from }}{% endif %}{% if filter_date_to %}&date_to={{ filter_date_to }}{% endif %}" class="page-btn">下一页 ›</a>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</section>
 {% endblock %}
 
 {% block extra_js %}
 {% load static %}
 <script src="{% static 'js/app.js' %}?v=20260930-archive1"></script>
+<script>
+// 负责人输入框 ↔ 隐藏的 assignee id：选中 datalist 里的人名才带上 id，手打的不作数
+const assigneeInput = document.getElementById('assignee-input');
+if (assigneeInput) {
+    assigneeInput.addEventListener('input', function() {
+        const val = this.value.trim();
+        const options = document.querySelectorAll('#users-datalist option');
+        let found = false;
+        options.forEach(function(opt) {
+            if (opt.value === val) {
+                this.setAttribute('data-userid', opt.getAttribute('data-id'));
+                document.getElementById('assignee-hidden').value = opt.getAttribute('data-id');
+                found = true;
+            }
+        }.bind(this));
+        if (!found) {
+            this.setAttribute('data-userid', '');
+            document.getElementById('assignee-hidden').value = '';
+        }
+    });
+}
+</script>
 {% endblock %}
