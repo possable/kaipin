@@ -1,7 +1,10 @@
-{# 产品资料字段。创建表单和详情页编辑区块共用。
-   项目分类/项目类型为必填，但老数据豁免：原本就是空的可以继续留空，
-   所以红星和 required 都按条件加，与后端 _validate_required_profile_fields 保持一致。
-   profile_required 由创建页传 True；编辑弹窗不传，走豁免判断。#}
+{% comment %}
+产品资料字段。创建表单和详情页编辑区块共用。
+项目分类/项目类型为必填，但老数据豁免：原本就是空的可以继续留空，
+所以红星和 required 都按条件加，与后端 _validate_required_profile_fields 保持一致。
+profile_required 由创建页传 True；编辑弹窗不传，走豁免判断。
+注意：这里必须用 {% comment %}，{# #} 只支持单行，多行会原样渲染到页面上。
+{% endcomment %}
 <div class="row g-3">
     <div class="col-md-6">
         <label class="form-label">产品名称</label>
