@@ -12,14 +12,12 @@ profile_required 由创建页传 True；编辑弹窗不传，走豁免判断。
     </div>
     <div class="col-md-6">
         <label class="form-label">项目分类{% if profile_required or product.brand %} <span style="color:var(--red);">*</span>{% endif %}</label>
-        <input type="text" name="brand" class="form-input" list="project-category-options"
-               {% if profile_required or product.brand %}required{% endif %}
-               value="{{ product.brand|default:'' }}">
-        <datalist id="project-category-options">
+        <select name="brand" class="form-input" {% if profile_required or product.brand %}required{% endif %}>
+            <option value="">未设置</option>
             {% for value, label in project_category_choices %}
-            <option value="{{ value }}">{{ label }}</option>
+            <option value="{{ value }}" {% if product.brand == value %}selected{% endif %}>{{ label }}</option>
             {% endfor %}
-        </datalist>
+        </select>
     </div>
     <div class="col-md-6">
         <label class="form-label">上架平台</label>
