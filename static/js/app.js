@@ -425,14 +425,16 @@ async function cancelProduct(productId) {
     }
 }
 
-// 归档页彻底删除一个品（草稿/已完成/已取消），级联删除全部阶段/任务/附件/日志，不可撤销
+// 上架归档页彻底删除一个品，级联删除全部阶段/任务/附件/日志，不可撤销。
+// 原来是 btn.closest('tr, .kanban-row').remove()，但归档页是 .archive-card 卡片、
+// 不是表格行，选择器一个都命不中 —— 删完界面没反应。改成整页刷新，
+// 标题上的「已完成（N）」计数也顺带更新。
 async function deleteArchivedProduct(productId, productName, btn) {
     if (!confirm(`确定彻底删除 "${productName}"？此操作不可撤销，将同时删除其全部阶段、任务、附件和日志。`)) return;
     btn.disabled = true;
     const resp = await postJSON(`/products/${productId}/delete/`);
     if (resp.ok) {
-        btn.closest('tr, .kanban-row').remove();
-        showToast('已删除', 'success');
+        location.reload();
     } else {
         btn.disabled = false;
         const data = await resp.json();

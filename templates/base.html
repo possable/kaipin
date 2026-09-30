@@ -7,7 +7,7 @@
     {% load static %}
     <link rel="stylesheet" href="{% static 'bootstrap.min.css' %}">
     <link rel="stylesheet" href="{% static 'fonts/bootstrap-icons.css' %}">
-    <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20260930-riskfit2">
+    <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20260930-archive1">
 </head>
 <body>
 {% if user.is_authenticated %}
@@ -25,6 +25,10 @@
             <a href="{% url 'kanban' %}" class="sidebar-item {% if request.resolver_match.url_name == 'kanban' %}active{% endif %}">
                 <i class="bi bi-kanban"></i>
                 <span>进度看板</span>
+            </a>
+            <a href="{% url 'archive' %}" class="sidebar-item {% if request.resolver_match.url_name == 'archive' %}active{% endif %}">
+                <i class="bi bi-archive"></i>
+                <span>上架归档</span>
             </a>
             {% if user.profile.department.name == '产品部' or user.profile.is_admin %}
             <div class="sidebar-section-label">管理</div>

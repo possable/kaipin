@@ -15,20 +15,20 @@
 
 <!-- KPI 统计卡片：动态跟随 StageTemplate，各阶段进行中项目数 -->
 <section class="kpi-row" style="grid-template-columns:repeat({{ stage_infos|length|add:1 }},1fr);">
-    <a class="kpi-card" href="/" title="查看全部项目">
+    <a class="kpi-card" href="/" title="查看全部未归档项目">
         <div class="kpi-icon"><i class="bi bi-collection"></i></div>
         <div class="kpi-title">项目总数</div>
         <div class="kpi-num">{{ kpi_total|default:"0" }}</div>
-        <div class="kpi-foot">全部项目</div>
+        <div class="kpi-foot">未归档</div>
     </a>
     {% for si in stage_infos %}
-    <a class="kpi-card{% if forloop.last %} purple{% endif %}"
+    <a class="kpi-card"
        href="?stage={{ si.name|urlencode }}"
        title="筛选：处于{{ si.name }}阶段的项目">
         <div class="kpi-icon"><i class="bi {{ si.icon }}"></i></div>
         <div class="kpi-title">{{ si.name }}</div>
         <div class="kpi-num">{{ si.count }}</div>
-        <div class="kpi-foot">{% if forloop.last %}进行中/已完成{% else %}进行中{% endif %}</div>
+        <div class="kpi-foot">进行中</div>
     </a>
     {% endfor %}
 </section>
@@ -60,7 +60,6 @@
             <option value="active" {% if status_filter == 'active' %}selected{% endif %}>进行中</option>
             <option value="overdue" {% if status_filter == 'overdue' %}selected{% endif %}>已超期</option>
             <option value="draft" {% if status_filter == 'draft' %}selected{% endif %}>待开始</option>
-            <option value="completed" {% if status_filter == 'completed' %}selected{% endif %}>已完成</option>
             <option value="cancelled" {% if status_filter == 'cancelled' %}selected{% endif %}>已取消</option>
         </select>
     </div>
@@ -326,7 +325,7 @@ const ALL_USERS = [{% for u in all_users %}{id:{{u.id}},name:"{{u.first_name|def
     }
 })();
 </script>
-<script src="{% static 'js/app.js' %}?v=20260930-requiredfields"></script>
+<script src="{% static 'js/app.js' %}?v=20260930-archive1"></script>
 <script>
 const assigneeInput = document.getElementById('assignee-input');
 if (assigneeInput) {

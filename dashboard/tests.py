@@ -35,9 +35,71 @@ class KanbanPaginationTests(TestCase):
         self.assertEqual(len(second_page.context['products']), 1)
 
     def test_all_project_status_views_use_the_same_page_size(self):
-        for status in ('all', 'active', 'overdue', 'completed', 'cancelled', 'draft'):
+        # 没有 'completed' —— 已完成的项目已经从看板搬到「上架归档」页了
+        for status in ('all', 'active', 'overdue', 'cancelled', 'draft'):
             with self.subTest(status=status):
                 response = self.client.get(reverse('kanban'), {'status': status})
 
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(response.context['page_obj'].paginator.per_page, 20)
+
+
+class ArchiveViewTests(TestCase):
+    """上架归档页：已完成的项目只出现在这里，不再出现在进度看板。"""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username='archive-admin',
+            password='test-password',
+        )
+        self.admin.profile.role = 'admin'
+        self.admin.profile.save()
+
+        self.outsider = User.objects.create_user(
+            username='archive-outsider',
+            password='test-password',
+        )
+
+        self.completed = Product.objects.create(
+            name='已完成的品', creator=self.admin, status='completed',
+        )
+        self.running = Product.objects.create(
+            name='进行中的品', creator=self.admin, status='active',
+        )
+
+    def test_archive_lists_only_completed_projects(self):
+        self.client.force_login(self.admin)
+
+        response = self.client.get(reverse('archive'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [p['name'] for p in response.context['completed_products']],
+            ['已完成的品'],
+        )
+
+    def test_kanban_no_longer_lists_completed_projects(self):
+        self.client.force_login(self.admin)
+
+        body = self.client.get(reverse('kanban')).content.decode()
+
+        self.assertNotIn('已完成的品', body)
+        self.assertIn('进行中的品', body)
+
+    def test_legacy_completed_status_link_falls_back_to_all(self):
+        """旧书签 ?status=completed 不能让看板报错或给一张空表。"""
+        self.client.force_login(self.admin)
+
+        response = self.client.get(reverse('kanban'), {'status': 'completed'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['status_filter'], 'all')
+        self.assertIn('进行中的品', response.content.decode())
+
+    def test_outsider_does_not_see_unrelated_completed_projects(self):
+        self.client.force_login(self.outsider)
+
+        response = self.client.get(reverse('archive'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['completed_products'], [])

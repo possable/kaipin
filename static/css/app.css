@@ -1976,13 +1976,17 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
 /* ======== 归档页 ======== */
 .archive-section { margin-top: 32px; }
 .archive-section h4 { font-size: 16px; font-weight: 700; color: var(--color-gray-700); margin-bottom: 12px; }
-.archive-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
-.archive-card { background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius-sm); padding: 12px 16px; text-decoration: none; color: var(--color-gray-700); display: flex; align-items: center; gap: 8px; transition: all 0.15s; }
+.archive-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.archive-card { background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius-sm); padding: 12px 16px; text-decoration: none; color: var(--color-gray-700); display: flex; align-items: center; flex-wrap: wrap; gap: 8px; row-gap: 2px; transition: all 0.15s; }
 .archive-card:hover { box-shadow: var(--shadow-sm); border-color: var(--color-gray-300); }
 .archive-card > strong { margin-right: auto; }
 .archive-card .status-icon { font-size: 16px; }
 .archive-card .status-icon.done { color: var(--green); }
 .archive-card .status-icon.cancelled { color: var(--gray); }
+/* 负责人 · 完成时间独占第二行：flex-basis:100% 逼它换行，
+   否则跟品名挤在同一行（品名一长就被压扁）。必须排在删除按钮后面，
+   不然 100% 宽度会把按钮也顶到第二行去。 */
+.archive-meta { flex-basis: 100%; font-size: 12px; color: var(--muted); }
 .archive-delete-btn { background: none; border: none; cursor: pointer; color: var(--gray); font-size: 14px; padding: 2px 4px; flex-shrink: 0; }
 .archive-delete-btn:hover { color: var(--red); }
 
