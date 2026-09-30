@@ -172,6 +172,25 @@ function hasDirty() {
     return DIRTY_FIELDS.size > 0;
 }
 
+// 产品资料表单是**整表批量提交**（update-profile 接口一次读所有字段），不适合按字段
+// 登记进 DIRTY_FIELDS，改为加载时快照一份内容、保存时比对来判断有没有改过。
+function serializeForm(form) {
+    return new URLSearchParams(new FormData(form)).toString();
+}
+
+// 返回 root 内被改动过、还没保存的产品资料表单；没有则返回 null。
+// ⚠️ 底部的「保存并刷新」只认 DIRTY_FIELDS，产品资料不属于它，必须靠这个函数单独兜住，
+// 否则用户在弹窗里改完项目分类/项目类型点「保存并刷新」会一个请求都不发，
+// 却提示"已保存"并刷新页面，改动看起来就是"没保存成功"。
+function changedProfileForm(root) {
+    if (!root) return null;
+    const form = root.querySelector('.product-profile-form');
+    // 没有基线（内容没走过 bindFieldHandlers）时一律当作"没改过"，
+    // 否则每次点保存都会白发一次整表提交
+    if (!form || form._baseline === undefined) return null;
+    return serializeForm(form) !== form._baseline ? form : null;
+}
+
 // 内容片段加载完成后，根据片段里的 data-can-edit 隐藏标记控制对应 footer 的
 // "保存并刷新"按钮是否显示。footerSelector 指向该弹窗的 footer 容器。
 function applyEditPermissionToFooter(content, footerSelector) {
@@ -265,6 +284,11 @@ function bindFieldHandlers(root = document) {
             this._prevValue = this.value;
             markDirty(this, `/products/checklist/${itemId}/save-notes/`, 'notes', this.value);
         });
+    });
+
+    // 产品资料表单 —— 记下加载时的内容作为比对基线（改动判断见 changedProfileForm）
+    root.querySelectorAll('.product-profile-form').forEach(form => {
+        form._baseline = serializeForm(form);
     });
 
     // 文件上传 —— 成功后 DOM 插入附件链接，不刷新页面
@@ -547,7 +571,8 @@ async function openProductModal(productId, productName) {
 
 function closeProductModal(event) {
     if (event) event.stopPropagation();
-    if (hasDirty() && !confirm('有未保存修改，确定关闭吗？')) return;
+    const content = document.getElementById('product-modal-content');
+    if ((hasDirty() || changedProfileForm(content)) && !confirm('有未保存修改，确定关闭吗？')) return;
     clearDirty();
     document.getElementById('product-modal-overlay').style.display = 'none';
     currentProductModalId = null;
@@ -662,6 +687,26 @@ async function saveAndReload(btn) {
         }
     }
 
+    // 产品资料表单（项目分类/项目类型等）走整表提交，不在 DIRTY_FIELDS 里，单独补一步
+    const profileForm = changedProfileForm(openModal);
+    if (profileForm) {
+        try {
+            const resp = await postJSON(`/products/${profileForm.dataset.pk}/update-profile/`,
+                                        new FormData(profileForm));
+            if (resp.ok) {
+                profileForm._baseline = serializeForm(profileForm);
+            } else {
+                let errMsg = `HTTP ${resp.status}`;
+                try { const data = await resp.json(); errMsg = data.error || errMsg; } catch (_) {}
+                console.error('产品资料保存失败:', errMsg);
+                failures.push(`产品资料: ${errMsg}`);
+            }
+        } catch (e) {
+            console.error('产品资料保存异常:', e);
+            failures.push('产品资料: 网络错误');
+        }
+    }
+
     if (failures.length > 0) {
         showToast(`保存失败: ${failures[0]}`, 'error');
         if (btn) {
@@ -681,6 +726,7 @@ async function saveProductProfile(event, form) {
     const pk = form.dataset.pk;
     const resp = await postJSON(`/products/${pk}/update-profile/`, new FormData(form));
     if (resp.ok) {
+        form._baseline = serializeForm(form);  // 已落库，清掉比对基线避免关闭时误报未保存
         showToast('产品资料已保存');
         if (form.closest('#product-modal-overlay')) {
             // 已经保存，清空 dirty 避免关闭时的未保存提示
