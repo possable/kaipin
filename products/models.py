@@ -79,10 +79,10 @@ class Product(models.Model):
 
     # ---- 产品资料（选填，创建后可逐步补充） ----
     product_name = models.CharField(max_length=200, blank=True, verbose_name='产品名称')
-    brand = models.CharField(max_length=100, blank=True, verbose_name='项目分类')
+    brand = models.CharField(max_length=100, blank=False, verbose_name='项目分类')
     platforms = models.CharField(max_length=200, blank=True, verbose_name='上架平台')
     category = models.CharField(
-        max_length=100, blank=True, choices=PROJECT_TYPE_CHOICES, verbose_name='项目类型'
+        max_length=100, blank=False, choices=PROJECT_TYPE_CHOICES, verbose_name='项目类型'
     )
     positioning = models.CharField(max_length=200, blank=True, verbose_name='产品定位')
     dosage_form = models.CharField(max_length=100, blank=True, verbose_name='剂型')

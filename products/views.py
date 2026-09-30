@@ -236,6 +236,32 @@ PRODUCT_PROFILE_DECIMAL_FIELDS = [
 ]
 
 
+# 必填的资料字段（第二个元素是报错文案里用的中文名）
+REQUIRED_PROFILE_FIELDS = [
+    ('brand', '项目分类'),
+    ('category', '项目类型'),
+]
+
+
+def _validate_required_profile_fields(post_data, product=None):
+    """项目分类/项目类型必填。返回错误文案，通过则返回 None。
+
+    老数据豁免：product 原本该字段就是空的，允许继续留空，不强制补填，
+    避免历史数据被卡住；原本有值的不允许清空。product=None 表示新建。
+
+    必须在 _apply_product_profile_fields() 之前调用，否则实例上的值已被
+    POST 覆盖，读不到数据库里的原值。
+    """
+    for field, label in REQUIRED_PROFILE_FIELDS:
+        if post_data.get(field, '').strip():
+            continue
+        if product is None:
+            return f'「{label}」不能为空。'
+        if getattr(product, field):
+            return f'「{label}」不能清空。'
+    return None
+
+
 def _apply_product_profile_fields(product, post_data):
     """从 POST 数据里读取产品资料字段并赋值到 product 实例上（不保存）"""
     for field in PRODUCT_PROFILE_TEXT_FIELDS:
@@ -258,6 +284,27 @@ def _apply_product_profile_fields(product, post_data):
             setattr(product, field, Decimal(value))
         except InvalidOperation:
             setattr(product, field, None)
+
+
+def _render_create_form(request, has_templates, all_users, name='', assignee_id='',
+                        started_at_raw='', expected_end_raw=''):
+    """重渲染创建表单：回填标量字段，并用 POST 造一个未落库的草稿回填产品资料。
+
+    不加这一步的话，校验失败时用户填的资料会全部丢失（partial 读的是 product.*）。
+    profile_required=True 让项目分类/项目类型在新建页始终带红星和浏览器拦截。
+    """
+    draft = Product()
+    _apply_product_profile_fields(draft, request.POST)
+    return render(request, 'products/product_create.html', {
+        'has_templates': has_templates,
+        'all_users': all_users,
+        'profile_required': True,
+        'product': draft,
+        'form_name': name,
+        'form_assignee_id': assignee_id,
+        'form_started_at': started_at_raw,
+        'form_expected_end_date': expected_end_raw,
+    })
 
 
 @login_required
@@ -283,6 +330,8 @@ def product_create(request):
             error_msg = '项目开始时间不能为空。'
         elif not expected_end_raw:
             error_msg = '项目预计结束时间不能为空。'
+        if not error_msg:
+            error_msg = _validate_required_profile_fields(request.POST)
 
         started_at = None
         expected_end = None
@@ -301,14 +350,10 @@ def product_create(request):
 
         if error_msg:
             messages.error(request, error_msg)
-            return render(request, 'products/product_create.html', {
-                'has_templates': has_templates,
-                'all_users': all_users,
-                'form_name': name,
-                'form_assignee_id': assignee_id,
-                'form_started_at': started_at_raw,
-                'form_expected_end_date': expected_end_raw,
-            })
+            return _render_create_form(
+                request, has_templates, all_users, name, assignee_id,
+                started_at_raw, expected_end_raw,
+            )
         if not has_templates:
             messages.error(request, '尚未配置阶段模板，请先配置。')
             return redirect('stage_template_list')
@@ -318,9 +363,10 @@ def product_create(request):
             assignee = User.objects.get(pk=int(assignee_id))
         except (User.DoesNotExist, ValueError):
             messages.error(request, '总负责人无效。')
-            return render(request, 'products/product_create.html', {
-                'has_templates': has_templates, 'all_users': all_users,
-            })
+            return _render_create_form(
+                request, has_templates, all_users, name, assignee_id,
+                started_at_raw, expected_end_raw,
+            )
 
         product = Product(
             name=name, creator=request.user, assignee=assignee, status='draft',
@@ -337,10 +383,7 @@ def product_create(request):
         messages.success(request, f'新品 "{name}" 已创建（草稿），编辑完成后由负责人发布。')
         return redirect('product_detail', pk=product.pk)
 
-    return render(request, 'products/product_create.html', {
-        'has_templates': has_templates,
-        'all_users': all_users,
-    })
+    return _render_create_form(request, has_templates, all_users)
 
 
 def _annotate_stage_permissions(product, stages, user):
@@ -1325,6 +1368,11 @@ def product_update_profile(request, pk):
     product = get_object_or_404(Product, pk=pk)
     if not product.can_be_managed_by(request.user):
         return JsonResponse({'error': '无权限操作'}, status=403)
+    # 必须先于 _apply_product_profile_fields：后者会把 POST 值写进实例，
+    # 之后就读不到数据库里的原值，老数据豁免的判据就失效了。
+    error = _validate_required_profile_fields(request.POST, product=product)
+    if error:
+        return JsonResponse({'error': error}, status=400)
     _apply_product_profile_fields(product, request.POST)
     product.save()
     log_action(request.user, '修改品', 'product', product.id, product.name, '更新产品资料')

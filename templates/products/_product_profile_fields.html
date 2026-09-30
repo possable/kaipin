@@ -1,12 +1,16 @@
-{# 产品资料字段（选填）。创建表单和详情页编辑区块共用。#}
+{# 产品资料字段。创建表单和详情页编辑区块共用。
+   项目分类/项目类型为必填，但老数据豁免：原本就是空的可以继续留空，
+   所以红星和 required 都按条件加，与后端 _validate_required_profile_fields 保持一致。
+   profile_required 由创建页传 True；编辑弹窗不传，走豁免判断。#}
 <div class="row g-3">
     <div class="col-md-6">
         <label class="form-label">产品名称</label>
         <input type="text" name="product_name" class="form-input" value="{{ product.product_name|default:'' }}">
     </div>
     <div class="col-md-6">
-        <label class="form-label">项目分类</label>
+        <label class="form-label">项目分类{% if profile_required or product.brand %} <span style="color:var(--red);">*</span>{% endif %}</label>
         <input type="text" name="brand" class="form-input" list="project-category-options"
+               {% if profile_required or product.brand %}required{% endif %}
                value="{{ product.brand|default:'' }}">
         <datalist id="project-category-options">
             {% for value, label in project_category_choices %}
@@ -19,8 +23,8 @@
         <input type="text" name="platforms" class="form-input" placeholder="如：天猫、抖音" value="{{ product.platforms|default:'' }}">
     </div>
     <div class="col-md-6">
-        <label class="form-label">项目类型</label>
-        <select name="category" class="form-input">
+        <label class="form-label">项目类型{% if profile_required or product.category %} <span style="color:var(--red);">*</span>{% endif %}</label>
+        <select name="category" class="form-input" {% if profile_required or product.category %}required{% endif %}>
             <option value="">未设置</option>
             {% for value, label in project_type_choices %}
             <option value="{{ value }}" {% if product.category == value %}selected{% endif %}>{{ label }}</option>

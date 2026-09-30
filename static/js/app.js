@@ -686,8 +686,15 @@ async function saveProductProfile(event, form) {
             closeProductModal();
         }
     } else {
-        const data = await resp.json();
-        showToast('保存失败: ' + (data.error || '未知错误'), 'error');
+        // 服务端异常时可能返回 HTML 而非 JSON，兜底避免静默无提示
+        let msg = '未知错误';
+        try {
+            const data = await resp.json();
+            msg = data.error || msg;
+        } catch (e) {
+            msg = `服务端错误 (${resp.status})`;
+        }
+        showToast('保存失败: ' + msg, 'error');
     }
     return false;
 }
