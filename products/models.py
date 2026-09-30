@@ -59,9 +59,9 @@ PROJECT_TYPE_CHOICES = [
 ]
 
 # 项目分类选项（三个渠道分类，2026-09 从项目类型里挪出来）
-# 注：brand 字段故意不设 choices —— 存量里还有「莱特维健」这类早期自由填写的历史值，
-# 设了 choices 会把它们判成非法。下拉选项在 products/context_processors.py 里拼
-# （这三个 + 库里已用过的历史值），表单用 <select>，看板筛选栏共用同一份。
+# 注：brand 字段不设 choices —— 值域靠表单里的 <select> 约束就够了，
+# 设 choices 只会多出一次无意义的迁移。曾短暂存在的自由填写历史值
+# （「莱特维健」「柏澳斯」）已在迁移 0015 里清空。
 PROJECT_CATEGORY_CHOICES = [
     ('跨境自营', '跨境自营'),
     ('京东京造', '京东京造'),
