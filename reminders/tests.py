@@ -355,6 +355,53 @@ class ProductOverdueAggregationTest(TestCase):
             self.assertIn('聚合超期品2', content)
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_admin_message_lists_overdue_stages_and_assignees(self, mock_send):
+        """管理员聚合消息要列出每个品具体哪些阶段超期、各自由谁负责。"""
+        owner_a = User.objects.create(username='agg_owner_a', first_name='阶段负责人甲')
+        owner_b = User.objects.create(username='agg_owner_b', first_name='阶段负责人乙')
+
+        # 品1：两个超期阶段，都是甲负责
+        first_stage = self.products[0].stages.first()
+        first_stage.assignee = owner_a
+        first_stage.save()
+        second_stage = ProductStage.objects.create(
+            product=self.products[0], name='聚合阶段1-2',
+            department=self.dept, order=2, assignee=owner_a,
+        )
+        Task.objects.create(
+            product_stage=second_stage, name='聚合任务1-2', order=1,
+            status='overdue', deadline=date.today() - timedelta(days=1),
+        )
+        # 同一阶段两个超期任务 → 该阶段数量应为 2
+        Task.objects.create(
+            product_stage=second_stage, name='聚合任务1-3', order=2,
+            status='overdue', deadline=date.today() - timedelta(days=1),
+        )
+
+        # 品2：乙负责
+        other_stage = self.products[1].stages.first()
+        other_stage.assignee = owner_b
+        other_stage.save()
+
+        scan_and_remind()
+
+        content = [c for c in mock_send.call_args_list if c[0][0] == 'wx_admin1'][0][0][1]
+        self.assertIn(
+            '超期阶段：聚合阶段1（阶段负责人甲，1 个超期任务）、'
+            '聚合阶段1-2（阶段负责人甲，2 个超期任务）',
+            content,
+        )
+        self.assertIn('超期阶段：聚合阶段2（阶段负责人乙，1 个超期任务）', content)
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_unassigned_stage_shows_placeholder(self, mock_send):
+        """超期阶段没设负责人时写明「未指定」，而不是直接省略。"""
+        scan_and_remind()
+
+        content = [c for c in mock_send.call_args_list if c[0][0] == 'wx_admin1'][0][0][1]
+        self.assertIn('超期阶段：聚合阶段1（未指定，1 个超期任务）', content)
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
     def test_unbound_admin_skipped(self, mock_send):
         scan_and_remind()
         called_userids = [c[0][0] for c in mock_send.call_args_list]

@@ -117,14 +117,37 @@ def notify_upward(entity, event_type, actor=None):
 # ---------------------------------------------------------------------------
 
 
-def _overdue_task_count(product):
-    """该品下「未完成阶段」里的超期任务数，用于聚合消息里给出量级。"""
+def _overdue_task_summary(product):
+    """该品下「未完成阶段」里的超期情况。
+
+    返回 (超期任务总数, [阶段明细, ...])，阶段明细按阶段顺序排列，每项是
+    {'name': 阶段名, 'owner': 负责人姓名（没设则为「未指定」）, 'count': 该阶段超期任务数}。
+    管理员聚合消息要能看出「哪些阶段超期了、该找谁」。
+    """
     from products.models import Task
 
-    return Task.objects.filter(
+    tasks = Task.objects.filter(
         product_stage__in=product.stages.exclude(status='completed'),
         status='overdue',
-    ).count()
+    ).select_related('product_stage__assignee').order_by('product_stage__order')
+
+    stage_rows = []
+    row_by_stage_id = {}
+    for task in tasks:
+        stage = task.product_stage
+        row = row_by_stage_id.get(stage.id)
+        if row is None:
+            owner = stage.assignee
+            row = {
+                'name': stage.name,
+                'owner': (owner.first_name or owner.username) if owner else '未指定',
+                'count': 0,
+            }
+            row_by_stage_id[stage.id] = row
+            stage_rows.append(row)
+        row['count'] += 1
+
+    return sum(row['count'] for row in stage_rows), stage_rows
 
 
 def _admin_recipients():
@@ -205,12 +228,20 @@ def notify_products_overdue_upward(products):
     lines = []
     for idx, product in enumerate(products, 1):
         try:
-            count = _overdue_task_count(product)
+            count, stage_rows = _overdue_task_summary(product)
         except Exception:
             logger.exception('统计超期任务数失败: product=%s', product.pk)
-            count = 0
+            count, stage_rows = 0, []
         suffix = f'（{count} 个超期任务）' if count else ''
         lines.append(f'{idx}. 「{product.name}」{suffix}')
+        if stage_rows:
+            # 每个超期阶段带负责人和该阶段的超期任务数，缩进一行列出，
+            # 管理员不用再点进去查
+            stage_text = '、'.join(
+                f'{row["name"]}（{row["owner"]}，{row["count"]} 个超期任务）'
+                for row in stage_rows
+            )
+            lines.append(f'   超期阶段：{stage_text}')
 
     situation = (
         f'你有 {len(products)} 个品存在超期任务，请关注：\n'
