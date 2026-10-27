@@ -50,6 +50,50 @@ def _kanban_products_for(user):
     return visible_products_for(user).exclude(status='completed')
 
 
+def _stage_effective_status(stage, task_statuses):
+    """阶段状态由子任务聚合；没有子任务时用库里存的状态。
+
+    KPI 卡片和看板行都用这一个函数判定，避免卡片数 8、点进去却是 0。
+    """
+    if not task_statuses:
+        return stage.status
+    if any(st == 'overdue' for st in task_statuses):
+        return 'overdue'
+    if all(st == 'completed' for st in task_statuses):
+        return 'completed'
+    if any(st == 'in_progress' for st in task_statuses):
+        return 'in_progress'
+    return 'pending'
+
+
+def _stage_kpi_counts(user, stage_names):
+    """KPI 卡片数字：处于各阶段（进行中 / 已超期）的活跃项目数。
+
+    - 口径与点击卡片后的 ?stage= 筛选完全一致，卡片上写几，点进去就是几条。
+    - 不受筛选栏影响（全局口径）：点卡片会清掉其他筛选条件，两边集合才能对齐。
+    - 同一个项目同一阶段名只计一次，避免阶段重复时数字比实际项目多。
+    """
+    counts = {name: 0 for name in stage_names}
+    if not counts:
+        return counts
+
+    today = date.today()
+    products = _kanban_products_for(user).filter(status='active').prefetch_related(
+        'stages__tasks'
+    )
+    for product in products:
+        hit_names = set()
+        for stage in product.stages.all():
+            if stage.name not in counts:
+                continue
+            task_statuses = [compute_task_status(t, today=today) for t in stage.tasks.all()]
+            if _stage_effective_status(stage, task_statuses) in ('in_progress', 'overdue'):
+                hit_names.add(stage.name)
+        for name in hit_names:
+            counts[name] += 1
+    return counts
+
+
 @login_required
 def kanban(request):
     """统一看板：通过状态筛选按钮和下拉筛选查看所有品（不含已完成，那些在上架归档页）"""
@@ -134,7 +178,10 @@ def kanban(request):
     )
 
     # 判断是否有筛选条件激活
-    has_filter = bool(q or assignee_id or category_filter or brand_filter or date_from or date_to)
+    has_filter = bool(
+        q or assignee_id or category_filter or brand_filter
+        or date_from or date_to or stage_filter or status_filter != 'all'
+    )
 
     # 构建统一的产品列表
     products_flat = []
@@ -158,29 +205,29 @@ def kanban(request):
     if status_filter == 'active':
         products_flat = [p for p in products_flat if not p['has_overdue']]
 
-    # KPI 阶段筛选：点击 KPI 卡片跳转过来时只显示当前处于该阶段的活跃项目
+    # KPI 阶段筛选：点击 KPI 卡片跳转过来时只显示当前处于该阶段的活跃项目。
+    # 判定口径必须和 _stage_kpi_counts 一致（进行中 + 已超期），否则卡片数字和列表条数对不上。
     if stage_filter:
         def _matches_stage(p):
             if p.get('product_status') != 'active':
                 return False
-            for s in p.get('all_stages', []):
-                if s.get('name') == stage_filter and s.get('status') == 'in_progress':
-                    return True
-            return False
+            return any(
+                s.get('name') == stage_filter
+                and s.get('status') in ('in_progress', 'overdue')
+                for s in p.get('all_stages', [])
+            )
         products_flat = [p for p in products_flat if _matches_stage(p)]
 
     # 按阶段顺序排序
     stage_order = {st.order: i for i, st in enumerate(stage_templates_ordered)}
     products_flat.sort(key=lambda p: stage_order.get(p.get('_stage_order', 0), 999))
 
-    # KPI 统计：按阶段模板动态生成卡片，统计当前处于该阶段的活跃项目数
+    # KPI 统计：按阶段模板动态生成卡片，统计当前处于该阶段的活跃项目数。
+    # 数字取全局口径（见 _stage_kpi_counts），点卡片会清掉其他筛选，两边才能对上。
     kpi_total = _kanban_products_for(request.user).count()
-    stage_counts = {st.name: 0 for st in kpi_stage_templates}
-    for p in products_flat:
-        if p.get('product_status') == 'active':
-            for s in p.get('all_stages', []):
-                if s.get('status') in ('in_progress', 'overdue') and s['name'] in stage_counts:
-                    stage_counts[s['name']] += 1
+    stage_counts = _stage_kpi_counts(
+        request.user, [st.name for st in kpi_stage_templates]
+    )
     stage_infos = [
         {
             'name': st.name,
@@ -210,6 +257,7 @@ def kanban(request):
         'filter_date_to': date_to,
         'has_filter': has_filter,
         'status_filter': status_filter,
+        'filter_stage': stage_filter,
         'today': date.today(),
         'kpi_total': kpi_total,
         'stage_counts': stage_counts,
@@ -265,18 +313,6 @@ def _build_product_item(request, product):
         避免看板和详情页显示的状态不一致。"""
         return compute_task_status(t, today=today_val)
 
-    def _stage_effective_status(s, task_statuses):
-        """阶段状态由子任务聚合"""
-        if not task_statuses:
-            return s.status  # 无子任务时用数据库存的状态
-        if any(st == 'overdue' for st in task_statuses):
-            return 'overdue'
-        if all(st == 'completed' for st in task_statuses):
-            return 'completed'
-        if any(st == 'in_progress' for st in task_statuses):
-            return 'in_progress'
-        return 'pending'
-
     def _stage_effective_color(s_tasks, task_colors):
         """阶段五色规则：与 compute_task_color 共用同一套颜色，按聚合优先级判定：
         有超期(red) > 有进行中(white) > 全部完成且有超期完成(yellow) > 全部完成(green) > 未开始(gray)"""
@@ -292,6 +328,10 @@ def _build_product_item(request, product):
 
     for s in product.stages.all():
         s_tasks = list(s.tasks.all())
+        # 反向 FK 不会因为 stages__tasks 预取而自动缓存，手动指回去，
+        # 后面取 t.product_stage.assignee 时才不会再逐条查库
+        for t in s_tasks:
+            t.product_stage = s
         task_effective = [_task_effective_status(t) for t in s_tasks]
         task_colors = [compute_task_color(t) for t in s_tasks]
         all_tasks_total += len(s_tasks)
@@ -316,14 +356,20 @@ def _build_product_item(request, product):
 
     progress_pct = int(all_tasks_done / all_tasks_total * 100) if all_tasks_total > 0 else 0
 
+    def _overdue_assignee(task):
+        """超期事项的联系人：优先任务负责人，任务没设人时退到阶段负责人。
+
+        点开「已超期」就是要找人对事，显示「未指定」没有意义；
+        任务和阶段都没负责人时留空，弹窗只显示事项本身。
+        """
+        user = task.assignee or task.product_stage.assignee
+        return (user.first_name or user.username) if user else ''
+
     # 卡点：全部超期任务
     overdue_tasks = [
         {
             'name': t.name,
-            'assignee': (
-                t.assignee.first_name or t.assignee.username
-                if t.assignee else '未指定'
-            ),
+            'assignee': _overdue_assignee(t),
             'task_id': t.id,
             'can_message': (
                 bool(t.assignee_id) and t.assignee_id != request.user.id

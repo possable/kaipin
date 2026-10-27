@@ -35,6 +35,8 @@
 
 <!-- 筛选栏 -->
 <form method="get" class="filterbar">
+    {# 从 KPI 卡片点进来时保留阶段筛选，再叠加搜索/负责人等条件 #}
+    {% if filter_stage %}<input type="hidden" name="stage" value="{{ filter_stage }}">{% endif %}
     <div class="field">
         <label>关键词搜索</label>
         <input type="text" name="q" class="control" placeholder="品名/产品名/项目分类..."
@@ -214,10 +216,10 @@
         <span class="page-info">共 {{ page_obj.paginator.count }} 条，第 {{ page_obj.number }}/{{ page_obj.paginator.num_pages }} 页</span>
         <div class="page-btns">
             {% if page_obj.has_previous %}
-            <a href="?page={{ page_obj.previous_page_number }}{% if search_q %}&q={{ search_q }}{% endif %}{% if filter_assignee %}&assignee={{ filter_assignee }}{% endif %}{% if status_filter != 'all' %}&status={{ status_filter }}{% endif %}{% if filter_category %}&category={{ filter_category }}{% endif %}{% if filter_brand %}&brand={{ filter_brand }}{% endif %}{% if filter_time_type %}&time_type={{ filter_time_type }}{% endif %}{% if filter_date_from %}&date_from={{ filter_date_from }}{% endif %}{% if filter_date_to %}&date_to={{ filter_date_to }}{% endif %}" class="page-btn">‹ 上一页</a>
+            <a href="?page={{ page_obj.previous_page_number }}{% if search_q %}&q={{ search_q }}{% endif %}{% if filter_assignee %}&assignee={{ filter_assignee }}{% endif %}{% if status_filter != 'all' %}&status={{ status_filter }}{% endif %}{% if filter_category %}&category={{ filter_category }}{% endif %}{% if filter_brand %}&brand={{ filter_brand }}{% endif %}{% if filter_time_type %}&time_type={{ filter_time_type }}{% endif %}{% if filter_date_from %}&date_from={{ filter_date_from }}{% endif %}{% if filter_date_to %}&date_to={{ filter_date_to }}{% endif %}{% if filter_stage %}&stage={{ filter_stage|urlencode }}{% endif %}" class="page-btn">‹ 上一页</a>
             {% endif %}
             {% if page_obj.has_next %}
-            <a href="?page={{ page_obj.next_page_number }}{% if search_q %}&q={{ search_q }}{% endif %}{% if filter_assignee %}&assignee={{ filter_assignee }}{% endif %}{% if status_filter != 'all' %}&status={{ status_filter }}{% endif %}{% if filter_category %}&category={{ filter_category }}{% endif %}{% if filter_brand %}&brand={{ filter_brand }}{% endif %}{% if filter_time_type %}&time_type={{ filter_time_type }}{% endif %}{% if filter_date_from %}&date_from={{ filter_date_from }}{% endif %}{% if filter_date_to %}&date_to={{ filter_date_to }}{% endif %}" class="page-btn">下一页 ›</a>
+            <a href="?page={{ page_obj.next_page_number }}{% if search_q %}&q={{ search_q }}{% endif %}{% if filter_assignee %}&assignee={{ filter_assignee }}{% endif %}{% if status_filter != 'all' %}&status={{ status_filter }}{% endif %}{% if filter_category %}&category={{ filter_category }}{% endif %}{% if filter_brand %}&brand={{ filter_brand }}{% endif %}{% if filter_time_type %}&time_type={{ filter_time_type }}{% endif %}{% if filter_date_from %}&date_from={{ filter_date_from }}{% endif %}{% if filter_date_to %}&date_to={{ filter_date_to }}{% endif %}{% if filter_stage %}&stage={{ filter_stage|urlencode }}{% endif %}" class="page-btn">下一页 ›</a>
             {% endif %}
         </div>
     </div>
@@ -292,38 +294,6 @@
 <script>
 const ALL_USERS = [{% for u in all_users %}{id:{{u.id}},name:"{{u.first_name|default:u.username|escapejs}}"}{% if not forloop.last %},{% endif %}{% endfor %}];
 
-// 筛选状态记忆：提交时存 localStorage，进入看板 URL 无参数则跳回上次筛选
-(function rememberKanbanFilters() {
-    const LS_KEY = 'kanban_filters_v1';
-    const urlParams = new URLSearchParams(location.search);
-    const hasAnyParam = ['q','assignee','status','category','brand','time_type','date_from','date_to','page'].some(k => urlParams.has(k));
-
-    if (!hasAnyParam) {
-        try {
-            const saved = localStorage.getItem(LS_KEY);
-            if (saved) {
-                const params = JSON.parse(saved);
-                const q = new URLSearchParams();
-                Object.keys(params).forEach(k => { if (params[k]) q.set(k, params[k]); });
-                const qs = q.toString();
-                if (qs) { location.replace('?' + qs); return; }
-            }
-        } catch (e) { console.warn('kanban filter restore failed', e); }
-    }
-
-    // 表单提交时把当前筛选存起来
-    const filterForm = document.querySelector('form.filterbar');
-    if (filterForm) {
-        filterForm.addEventListener('submit', () => {
-            const fd = new FormData(filterForm);
-            const params = {};
-            for (const [k, v] of fd.entries()) {
-                if (v) params[k] = v;
-            }
-            try { localStorage.setItem(LS_KEY, JSON.stringify(params)); } catch (e) {}
-        });
-    }
-})();
 </script>
 <script src="{% static 'js/app.js' %}?v=20260930-profile1"></script>
 <script>
