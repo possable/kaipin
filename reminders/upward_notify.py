@@ -290,3 +290,43 @@ def notify_stages_overdue_upward(stages):
         if _send_aggregate(recipient, situation, 'stage', own_stages[0].pk, summary):
             sent += 1
     return sent
+
+
+def notify_stage_owners_overdue_upward(stages):
+    """阶段负责人：自己负责的阶段有超期任务时，每天一条聚合提醒。
+
+    收件人是 ProductStage.assignee（阶段负责人）。原先阶段超期只通知品总负责人，
+    只负责某个阶段的人收不到任何提醒。同一个人既负责整个品又负责该阶段时，
+    品级消息已经列出了这些阶段，这里跳过，避免一天收到两条重复消息。
+
+    返回成功发送的收件人数。
+    """
+    stages = list(stages)
+    if not stages:
+        return 0
+
+    eligible = [
+        stage for stage in stages
+        if stage.assignee_id and stage.assignee_id != stage.product.assignee_id
+    ]
+    groups = _group_by_recipient(eligible, lambda s: s.assignee)
+
+    sent = 0
+    for recipient, own_stages in groups:
+        lines = []
+        for idx, stage in enumerate(own_stages, 1):
+            count = stage.tasks.filter(status='overdue').count()
+            lines.append(
+                f'{idx}. 「{stage.product.name}」·「{stage.name}」'
+                f'（{count} 个超期任务）'
+            )
+
+        situation = (
+            f'你负责的 {len(own_stages)} 个阶段存在超期任务，请关注：\n'
+            + '\n'.join(lines)
+        )
+        summary = f'{len(own_stages)} 个阶段存在超期任务'
+
+        if _send_aggregate(recipient, situation, 'stage', own_stages[0].pk, summary):
+            sent += 1
+    return sent

@@ -1,4 +1,5 @@
 from django.test import TestCase
+from django.utils import timezone
 from django.contrib.auth.models import User
 from django.urls import reverse
 from datetime import date, timedelta
@@ -592,3 +593,80 @@ class NotifyUpwardTest(TestCase):
             self.assertIn('wx_admin2', called_userids)
             # 关键断言：失败的那个之外，另一个必须真的发出去了
             self.assertEqual(delivered, ['wx_admin2'])
+
+
+class StageOwnerOverdueAggregationTest(TestCase):
+    """阶段负责人应收到自己负责阶段的超期提醒，且每人每天一条聚合消息。"""
+
+    def setUp(self):
+        self.dept = Department.objects.create(name='阶段负责人部门')
+        self.creator = User.objects.create(username='sowner_creator', first_name='创建人')
+
+        self.owner1 = User.objects.create(username='stage_owner1', first_name='阶段负责人甲')
+        self.owner1.profile.wechat_userid = 'wx_stage_owner1'
+        self.owner1.profile.save()
+
+        self.owner2 = User.objects.create(username='stage_owner2', first_name='阶段负责人乙')
+        self.owner2.profile.wechat_userid = 'wx_stage_owner2'
+        self.owner2.profile.save()
+
+        self.product = Product.objects.create(name='阶段负责人测试品', creator=self.creator)
+        # 甲负责两个阶段，乙负责一个阶段
+        self.stage_a = self._make_stage('包装设计', 1, self.owner1, task_count=2)
+        self.stage_b = self._make_stage('营销策划', 2, self.owner1, task_count=1)
+        self.stage_c = self._make_stage('产品生产', 3, self.owner2, task_count=3)
+
+    def _make_stage(self, name, order, assignee, task_count):
+        stage = ProductStage.objects.create(
+            product=self.product, name=name, order=order,
+            department=self.dept, assignee=assignee, status='in_progress',
+        )
+        for i in range(task_count):
+            Task.objects.create(
+                product_stage=stage, name=f'{name}任务{i + 1}', order=i + 1,
+                status='in_progress',
+                started_at=timezone.now() - timedelta(days=5),
+                expected_end_date=date.today() - timedelta(days=1),
+                deadline=date.today() - timedelta(days=1),
+            )
+        return stage
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_each_stage_owner_gets_one_aggregate_message(self, mock_send):
+        scan_and_remind()
+
+        calls1 = [c for c in mock_send.call_args_list if c[0][0] == 'wx_stage_owner1']
+        self.assertEqual(len(calls1), 1, '一个人负责多个阶段也只发一条')
+        content1 = calls1[0][0][1]
+        self.assertIn('你负责的 2 个阶段存在超期任务', content1)
+        self.assertIn('「阶段负责人测试品」·「包装设计」（2 个超期任务）', content1)
+        self.assertIn('「阶段负责人测试品」·「营销策划」（1 个超期任务）', content1)
+
+        calls2 = [c for c in mock_send.call_args_list if c[0][0] == 'wx_stage_owner2']
+        self.assertEqual(len(calls2), 1)
+        self.assertIn('「阶段负责人测试品」·「产品生产」（3 个超期任务）', calls2[0][0][1])
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_stage_owner_without_wechat_is_skipped(self, mock_send):
+        self.owner2.profile.wechat_userid = ''
+        self.owner2.profile.save()
+
+        scan_and_remind()
+
+        called = [c[0][0] for c in mock_send.call_args_list]
+        self.assertNotIn('wx_stage_owner2', called)
+        self.assertIn('wx_stage_owner1', called)
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_dual_role_owner_does_not_get_duplicate_messages(self, mock_send):
+        """阶段负责人同时也是品总负责人时，只收品级那条，不重复发阶段级。"""
+        self.product.assignee = self.owner1
+        self.product.save()
+
+        scan_and_remind()
+
+        calls = [c for c in mock_send.call_args_list if c[0][0] == 'wx_stage_owner1']
+        self.assertEqual(len(calls), 1)
+        content = calls[0][0][1]
+        self.assertIn('你负责的 1 个品存在超期阶段', content)
+        self.assertNotIn('你负责的 2 个阶段存在超期任务', content)

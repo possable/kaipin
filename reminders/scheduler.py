@@ -8,6 +8,7 @@ from activity_log.utils import log_action
 from .models import ReminderLog, UpwardNotifyLog
 from .upward_notify import (
     notify_products_overdue_upward,
+    notify_stage_owners_overdue_upward,
     notify_stages_overdue_upward,
 )
 from .wechat import send_message_to_user
@@ -110,12 +111,14 @@ def scan_and_remind():
 
     # ---- 阶段/品超期聚合检测：通知上一级负责人，按天去重 ----
 
-    # 阶段超期：未完成阶段下存在超期任务 → 通知品总负责人
+    # 阶段超期：未完成阶段下存在超期任务 → 通知品总负责人 + 该阶段负责人
     #
     # 同样是先收集再按负责人聚合发送。品总负责人往往同时管好几个品、
     # 每个品又可能有好几个阶段超期，逐条发就是一天七八条几乎一样的消息。
     newly_overdue_stages = []
-    for stage in ProductStage.objects.exclude(status='completed').select_related('product'):
+    for stage in ProductStage.objects.exclude(status='completed').select_related(
+        'product', 'assignee'
+    ):
         has_overdue_task = stage.tasks.filter(status='overdue').exists()
         if not has_overdue_task:
             continue
@@ -140,6 +143,10 @@ def scan_and_remind():
             notify_stages_overdue_upward(newly_overdue_stages)
         except Exception:
             logger.exception('阶段超期聚合通知失败')
+        try:
+            notify_stage_owners_overdue_upward(newly_overdue_stages)
+        except Exception:
+            logger.exception('阶段负责人超期聚合通知失败')
 
     # 品超期：未完成/未取消的品下存在超期阶段（未完成阶段含超期任务） → 通知所有管理员
     #
