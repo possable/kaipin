@@ -14,11 +14,7 @@
             {{ product.get_status_display }}
         </span>
     </div>
-    {% if product.status == 'draft' and can_manage %}
-    <button class="btn btn-primary btn-sm" onclick="publishProduct({{ product.pk }})">
-        <i class="bi bi-send"></i> 发布项目
-    </button>
-    {% endif %}
+    {# 发布按钮只保留 _product_info.html 里那一个：原来这里也有一个，草稿项目会并排出现两个 #}
 </div>
 
 {% include 'dashboard/_product_info.html' %}

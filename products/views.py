@@ -375,12 +375,17 @@ def product_create(request):
         _apply_product_profile_fields(product, request.POST)
         product.save()
         product.create_stages_from_templates()
+        # 新建即发布：创建完直接正式开始，不再多一道「草稿 → 发布」的手续。
+        # 先建草稿再 publish()，是为了复用发布时激活第一个阶段的逻辑。
+        product.publish()
         product.sync_auto_todo()
         for stage in product.stages.all():
             stage.sync_auto_todo()
+        first_stage = product.stages.order_by('order').first()
+        stage_note = f'，首阶段「{first_stage.name}」已开始' if first_stage else ''
         log_action(request.user, '创建新品', 'product', product.id, product.name,
-                   f'草稿，共 {product.stages.count()} 个阶段')
-        messages.success(request, f'新品 "{name}" 已创建（草稿），编辑完成后由负责人发布。')
+                   f'已发布，共 {product.stages.count()} 个阶段{stage_note}')
+        messages.success(request, f'新品 "{name}" 已创建并发布，项目正式开始。')
         return redirect('product_detail', pk=product.pk)
 
     return _render_create_form(request, has_templates, all_users)

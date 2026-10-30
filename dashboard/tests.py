@@ -309,3 +309,129 @@ class KanbanOverdueContactTests(TestCase):
 
         self.assertEqual(item['overdue_tasks'][0]['assignee'], '')
         self.assertNotIn('未指定', response.content.decode())
+
+
+class KanbanStatusByCurrentStageTests(TestCase):
+    """项目状态只看当前阶段：后面阶段的超期/完成情况不影响项目状态。
+
+    回归点：以前状态是拿全部阶段的超期任务聚合出来的，
+    包装设计超期、当前阶段正常，项目也会显示「已超期」。
+    """
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username='stage-status-admin', password='test-password',
+        )
+        self.admin.profile.role = 'admin'
+        self.admin.profile.save()
+        self.client.force_login(self.admin)
+        self.department = Department.objects.create(name='状态测试部门')
+
+    def _make_product(self, name):
+        return Product.objects.create(name=name, creator=self.admin)
+
+    def _make_stage(self, product, name, order, task_status='in_progress',
+                    expected_offset_days=5):
+        stage = ProductStage.objects.create(
+            product=product, name=name, order=order,
+            department=self.department, status='in_progress',
+            started_at=timezone.now() - timedelta(days=10),
+        )
+        Task.objects.create(
+            product_stage=stage, name=f'{name}任务', order=1,
+            status=task_status,
+            started_at=timezone.now() - timedelta(days=5),
+            expected_end_date=timezone.localdate() + timedelta(days=expected_offset_days),
+        )
+        return stage
+
+    def _item(self, name):
+        response = self.client.get(reverse('kanban'))
+        return next(p for p in response.context['products'] if p['name'] == name)
+
+    def test_later_stage_overdue_does_not_mark_project_overdue(self):
+        product = self._make_product('后阶段超期品')
+        self._make_stage(product, '当前阶段', 1, expected_offset_days=5)
+        self._make_stage(product, '后置阶段', 2, expected_offset_days=-1)
+
+        item = self._item('后阶段超期品')
+
+        self.assertEqual(item['status_label'], '进行中')
+        self.assertFalse(item['has_overdue'])
+        self.assertEqual(item['overdue_tasks'], [])
+
+    def test_overdue_popup_lists_only_current_stage_tasks(self):
+        product = self._make_product('当前阶段超期品')
+        self._make_stage(product, '当前阶段', 1, expected_offset_days=-1)
+        self._make_stage(product, '后置阶段', 2, expected_offset_days=-1)
+
+        item = self._item('当前阶段超期品')
+
+        self.assertEqual(item['status_label'], '已超期')
+        self.assertEqual(
+            [t['stage_name'] for t in item['overdue_tasks']], ['当前阶段'],
+        )
+
+    def test_all_stages_done_is_pending_advance(self):
+        product = self._make_product('全部完成品')
+        self._make_stage(product, '唯一阶段', 1, task_status='completed')
+
+        item = self._item('全部完成品')
+
+        self.assertEqual(item['status_label'], '待推进')
+
+    def test_legacy_product_without_started_stage_uses_first_unfinished(self):
+        """历史数据里阶段状态没推进、没有任何 in_progress 阶段时，
+        当前阶段取第一个没完成的阶段，而不是让项目永远显示「进行中」。"""
+        product = self._make_product('未推进阶段品')
+        done_stage = self._make_stage(product, '已完阶段', 1, task_status='completed')
+        done_stage.status = 'completed'
+        done_stage.save()
+        self._make_stage(product, '未开始阶段', 2, expected_offset_days=-1)
+
+        item = self._item('未推进阶段品')
+
+        self.assertEqual(item['status_label'], '已超期')
+        self.assertEqual(
+            [t['stage_name'] for t in item['overdue_tasks']], ['未开始阶段'],
+        )
+
+    def test_overdue_filter_skips_later_stage_only(self):
+        product = self._make_product('后阶段超期筛选品')
+        self._make_stage(product, '当前阶段', 1, expected_offset_days=5)
+        self._make_stage(product, '后置阶段', 2, expected_offset_days=-1)
+
+        response = self.client.get(reverse('kanban'), {'status': 'overdue'})
+
+        self.assertNotIn(
+            '后阶段超期筛选品',
+            [p['name'] for p in response.context['products']],
+        )
+
+
+class KanbanSortingTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username='sort-admin', password='test-password',
+        )
+        self.admin.profile.role = 'admin'
+        self.admin.profile.save()
+        self.client.force_login(self.admin)
+
+    def test_projects_sorted_by_start_date_desc(self):
+        Product.objects.create(
+            name='早开始', creator=self.admin,
+            started_at=timezone.now() - timedelta(days=10),
+        )
+        Product.objects.create(
+            name='晚开始', creator=self.admin,
+            started_at=timezone.now() - timedelta(days=1),
+        )
+        Product.objects.create(name='还没开始', creator=self.admin)
+
+        response = self.client.get(reverse('kanban'))
+
+        self.assertEqual(
+            [p['name'] for p in response.context['products']],
+            ['晚开始', '早开始', '还没开始'],
+        )

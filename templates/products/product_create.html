@@ -46,11 +46,11 @@
         {% include 'products/_product_profile_fields.html' %}
 
         <div class="form-group">
-            <small class="text-muted">创建后进入草稿箱，由总负责人编辑完善后发布正式开始。</small>
+            <small class="text-muted">创建后立即发布，项目正式开始，第一个阶段自动进入进行中。</small>
         </div>
         <div style="display:flex;gap:8px;margin-top:20px;">
             <button type="submit" class="btn btn-primary">
-                <i class="bi bi-check-lg"></i> 创建草稿
+                <i class="bi bi-check-lg"></i> 创建并发布
             </button>
             <a href="{% url 'kanban' %}" class="btn btn-outline">取消</a>
         </div>

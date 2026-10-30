@@ -13,7 +13,8 @@ profile_required 由创建页传 True；编辑弹窗不传，走豁免判断。
     <div class="col-md-6">
         <label class="form-label">项目分类{% if profile_required or product.brand %} <span style="color:var(--red);">*</span>{% endif %}</label>
         <select name="brand" class="form-input" {% if profile_required or product.brand %}required{% endif %}>
-            <option value="">未设置</option>
+            {% comment %}占位项不可选：新项目必须主动选，老数据留空时也不会被默认选中第一项{% endcomment %}
+            <option value="" disabled hidden {% if not product.brand %}selected{% endif %}>请选择</option>
             {% for value, label in project_category_choices %}
             <option value="{{ value }}" {% if product.brand == value %}selected{% endif %}>{{ label }}</option>
             {% endfor %}
@@ -26,7 +27,8 @@ profile_required 由创建页传 True；编辑弹窗不传，走豁免判断。
     <div class="col-md-6">
         <label class="form-label">项目类型{% if profile_required or product.category %} <span style="color:var(--red);">*</span>{% endif %}</label>
         <select name="category" class="form-input" {% if profile_required or product.category %}required{% endif %}>
-            <option value="">未设置</option>
+            {% comment %}占位项不可选：新项目必须主动选，老数据留空时也不会被默认选中第一项{% endcomment %}
+            <option value="" disabled hidden {% if not product.category %}selected{% endif %}>请选择</option>
             {% for value, label in project_type_choices %}
             <option value="{{ value }}" {% if product.category == value %}selected{% endif %}>{{ label }}</option>
             {% endfor %}

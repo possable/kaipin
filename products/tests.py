@@ -701,3 +701,63 @@ class UpwardNotificationTriggerTest(TestCase):
         mock_send.assert_called()
         called_userids = [call.args[0] for call in mock_send.call_args_list]
         self.assertIn('wx_admin2', called_userids)
+
+
+class ProductCreatePublishTest(TestCase):
+    """新建项目直接发布：不再有「创建草稿 → 手动发布」这一道。"""
+
+    def setUp(self):
+        self.dept = Department.objects.create(name='策划部')
+        self.admin = User.objects.create_user(
+            username='create-admin', password='pass',
+        )
+        self.admin.profile.role = 'admin'
+        self.admin.profile.department = self.dept
+        self.admin.profile.save()
+        self.owner = User.objects.create_user(
+            username='create-owner', password='pass', first_name='负责人',
+        )
+        self.owner.profile.department = self.dept
+        self.owner.profile.save()
+
+        st = StageTemplate.objects.create(name='阶段1', order=1, department=self.dept)
+        TaskTemplate.objects.create(stage_template=st, name='任务A', order=1)
+        StageTemplate.objects.create(name='阶段2', order=2, department=self.dept)
+        self.client.login(username='create-admin', password='pass')
+
+    def _post_create(self, name='新品'):
+        return self.client.post(reverse('product_create'), {
+            'name': name,
+            'assignee': self.owner.pk,
+            'started_at': timezone.localdate().isoformat(),
+            'expected_end_date': (timezone.localdate() + timedelta(days=60)).isoformat(),
+            'brand': '跨境自营',
+            'category': '新品开发',
+        })
+
+    def test_new_product_is_published_immediately(self):
+        response = self._post_create()
+        product = Product.objects.get(name='新品')
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(product.status, 'active')
+        first_stage = product.stages.order_by('order').first()
+        self.assertEqual(first_stage.status, 'in_progress')
+        self.assertIsNotNone(first_stage.started_at)
+        self.assertEqual(product.current_stage_order, 1)
+
+    def test_detail_page_shows_only_one_publish_button_for_legacy_draft(self):
+        """草稿项目详情页上只能有一个「发布项目」按钮（详情页头 + 资料区块各放过一个）。"""
+        product = Product.objects.create(
+            name='遗留草稿', creator=self.admin, assignee=self.owner,
+            status='draft',
+        )
+        ProductStage.objects.create(
+            product=product, name='阶段1', order=1, department=self.dept,
+        )
+
+        body = self.client.get(
+            reverse('product_detail', args=[product.pk]),
+        ).content.decode()
+
+        self.assertEqual(body.count('发布项目'), 1)

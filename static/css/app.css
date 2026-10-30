@@ -239,21 +239,52 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
 .table-panel table { width: 100%; border-collapse: collapse; }
 .table-panel thead { background: rgba(10,28,39,.66); border-bottom: 1px solid var(--line2); }
 .table-panel th { font-size: 12px; font-weight: 500; color: #c2cbcf; text-align: left; padding: 14px; }
-.table-panel tbody tr { border-bottom: 1px solid rgba(136,160,174,.10); transition: background .12s, opacity .12s; }
-/* 悬停高亮：当前行加绿色底 + 左侧色条并提亮文字，其余行压暗，把对比度拉开 */
-.table-panel tbody:hover tr:not(:hover) { opacity: .5; }
-.table-panel tbody tr:hover { background: rgba(0,232,119,.07); }
-.table-panel tbody tr:hover td { color: #f2f6f7; }
+.table-panel tbody tr { border-bottom: 1px solid rgba(136,160,174,.10); transition: background .12s, color .12s; }
+/* 悬停高亮：只提亮当前行（绿色底 + 左侧色条），其余行保持原样、不压暗 */
+.table-panel tbody tr:hover { background: rgba(0,232,119,.18); }
+.table-panel tbody tr:hover td { color: #ffffff; }
 .table-panel tbody tr:hover td:first-child { box-shadow: inset 3px 0 0 var(--green); }
 .table-panel td { font-size: 13px; color: #dce1e3; padding: 14px; vertical-align: middle; overflow: visible; }
+/* 右侧列收窄后，日期/剩余天数保持单行，避免在连字符处折行 */
+.table-panel td:nth-child(4), .table-panel td:nth-child(5),
+.table-panel td:nth-child(6) { white-space: nowrap; }
+/* 开始时间列整体往右挪一点，和负责人列拉开距离 */
+.table-panel th:nth-child(4), .table-panel td:nth-child(4) { padding-left: 40px; }
+/* 负责人列不换行：三个字以上的姓名保持一行 */
+.table-panel th:nth-child(3), .table-panel td:nth-child(3) { white-space: nowrap; }
+/* 优先级 / 详情 / 导出表头强制一行 */
+.table-panel th:nth-child(8), .table-panel th:nth-child(9),
+.table-panel th:nth-child(10) { white-space: nowrap; }
 .table-panel .project-name { font-size: 14px; font-weight: 600; color: var(--text); cursor: pointer; background: none; border: none; text-align: left; padding: 0; }
 .table-panel .project-name:hover { color: var(--green); }
 
 /* 阶段进度点线 */
+/* 阶段颜色图例：和「阶段进度」表头排在同一行，说明进度点五种颜色各自代表什么 */
+.table-panel th.stage-col .stage-col-head {
+    display: flex; align-items: center; justify-content: center;
+    flex-wrap: wrap; gap: 4px 12px;
+}
+.stage-legend {
+    display: inline-flex; align-items: center;
+    flex-wrap: wrap; gap: 4px 12px;
+    font-size: 12px; font-weight: 400; color: var(--muted);
+}
+.stage-legend > span { display: inline-flex; align-items: center; gap: 5px; }
+.legend-dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    display: inline-block; flex-shrink: 0;
+}
+.legend-dot.color-gray { background: #6b7280; }
+/* color-white 是「进行中」的语义值（compute_task_color 仍在用 white），配色改成蓝色 */
+.legend-dot.color-white { background: #3d9bff; box-shadow: 0 0 4px rgba(61,155,255,.45); }
+.legend-dot.color-red { background: var(--red); }
+.legend-dot.color-green { background: var(--green); }
+.legend-dot.color-yellow { background: #f5c542; }
+
 .stage-progress { position: relative; height: 40px; padding-top: 4px; }
 /* 侧边栏收窄后阶段列变宽：把进度点线收在一个居中的轨道里，避免被拉得两头散开 */
 .table-panel th.stage-col, .table-panel td.stage-col { text-align: center; }
-.table-panel td.stage-col .stage-progress { max-width: 320px; margin: 0 auto; }
+.table-panel td.stage-col .stage-progress { max-width: 400px; margin: 0 auto; }
 .stage-line {
     position: absolute; left: 6px; right: 6px; top: 12px; height: 2px;
     background: #55636e;
@@ -285,14 +316,14 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
 .stage-pt.orange { background: var(--orange); border-color: var(--orange); box-shadow: 0 0 6px rgba(255,154,0,.28); }
 /* 五色状态规则：未开始灰/进行中白/已完成绿/已超期红/已超期但完成黄 */
 .stage-pt.color-gray { background: #6b7280; border-color: #6b7280; }
-.stage-pt.color-white { background: #f4f7f8; border-color: #f4f7f8; box-shadow: 0 0 6px rgba(244,247,248,.4); }
+.stage-pt.color-white { background: #3d9bff; border-color: #3d9bff; box-shadow: 0 0 6px rgba(61,155,255,.45); }
 .stage-pt.color-green { background: var(--green); border-color: var(--green); box-shadow: 0 0 7px rgba(0,232,119,.36); }
 .stage-pt.color-red { background: var(--red); border-color: var(--red); box-shadow: 0 0 6px rgba(255,61,67,.28); }
 .stage-pt.color-yellow { background: #f5c542; border-color: #f5c542; box-shadow: 0 0 6px rgba(245,197,66,.36); }
 .stage-labels {
     position: absolute; left: -2px; right: -2px; top: 21px;
-    display: flex; justify-content: space-between;
-    color: #afb8bd; font-size: 10px;
+    display: flex; justify-content: space-between; gap: 8px;
+    color: #afb8bd; font-size: 10px; white-space: nowrap;
 }
 
 /* 剩余天数 */
@@ -316,7 +347,7 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
 .status-badge.is-clickable:hover { opacity: 0.85; }
 /* 五色状态规则：未开始灰/进行中白/已完成绿/已超期红/已超期但完成黄 */
 .status-badge.color-gray { color: #c3c8cb; background: rgba(70,80,86,.23); }
-.status-badge.color-white { color: #f4f7f8; background: rgba(244,247,248,.15); }
+.status-badge.color-white { color: #3d9bff; background: rgba(61,155,255,.15); }
 .status-badge.color-green { color: var(--green); background: rgba(0,102,54,.31); }
 .status-badge.color-red { color: var(--red); background: rgba(93,31,32,.42); }
 .status-badge.color-yellow { color: #f5c542; background: rgba(120,95,20,.30); }

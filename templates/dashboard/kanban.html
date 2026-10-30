@@ -109,12 +109,24 @@
 <section class="table-panel">
     <table>
     <colgroup>
-        <col style="width:120px"><col style="width:300px"><col style="width:65px">
-        <col style="width:85px"><col style="width:85px"><col style="width:70px"><col style="width:90px">
-        <col style="width:55px"><col style="width:48px"><col style="width:48px">
+        <col style="width:120px"><col style="width:420px"><col style="width:60px">
+        <col style="width:80px"><col style="width:80px"><col style="width:62px"><col style="width:84px">
+        <col style="width:48px"><col style="width:42px"><col style="width:42px">
     </colgroup>
     <thead><tr>
-        <th>项目名称</th><th class="stage-col">阶段进度</th><th>负责人</th>
+        <th>项目名称</th>
+        <th class="stage-col">
+            <div class="stage-col-head">
+                <span>阶段进度</span>
+                <span class="stage-legend">
+                    <span><i class="legend-dot color-white"></i>进行中</span>
+                    <span><i class="legend-dot color-red"></i>已超期</span>
+                    <span><i class="legend-dot color-green"></i>按期完成</span>
+                    <span><i class="legend-dot color-yellow"></i>超期完成</span>
+                </span>
+            </div>
+        </th>
+        <th>负责人</th>
         <th>开始时间</th><th>预计结束时间</th><th>剩余天数</th><th>状态</th>
         <th>优先级</th><th>详情</th><th>导出</th>
     </tr></thead>

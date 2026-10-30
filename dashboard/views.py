@@ -218,9 +218,8 @@ def kanban(request):
             )
         products_flat = [p for p in products_flat if _matches_stage(p)]
 
-    # 按阶段顺序排序
-    stage_order = {st.order: i for i, st in enumerate(stage_templates_ordered)}
-    products_flat.sort(key=lambda p: stage_order.get(p.get('_stage_order', 0), 999))
+    # 按开始时间降序：最近开始的项目排前面；还没开始（无 start_date）的排最后
+    products_flat.sort(key=lambda p: p.get('start_date') or date.min, reverse=True)
 
     # KPI 统计：按阶段模板动态生成卡片，统计当前处于该阶段的活跃项目数。
     # 数字取全局口径（见 _stage_kpi_counts），点卡片会清掉其他筛选，两边才能对上。
@@ -294,17 +293,14 @@ def _build_product_item(request, product):
         and product.can_be_managed_by(request.user)
     )
 
-    current = product.get_current_stage()
-    can_message_stage = False
-    if current:
-        can_message_stage = (
-            current.assignee_id and current.assignee_id != request.user.id
-            and current.can_be_managed_by(request.user)
-        )
-
     all_tasks_total = 0
     all_tasks_done = 0
-    all_overdue_tasks = []
+    # 状态只看当前阶段：超期/待推进都按当前阶段的任务算，别的阶段超期不算到项目状态上。
+    # 当前阶段 = 按顺序第一个还没完成的阶段（含未开始）。
+    # 不能用 get_current_stage()（status=='in_progress'）：历史数据里有不少项目的阶段状态
+    # 没跟着推进，会出现「项目还在跑、却没有任何进行中阶段」的情况，状态判定会失真。
+    current = None
+    current_overdue_tasks = []
     all_stages = []
     today_val = date.today()
 
@@ -337,10 +333,12 @@ def _build_product_item(request, product):
         all_tasks_total += len(s_tasks)
         all_tasks_done += sum(1 for st in task_effective if st == 'completed')
         stage_overdue_tasks = [t for t, st in zip(s_tasks, task_effective) if st == 'overdue']
-        all_overdue_tasks.extend(stage_overdue_tasks)
         stage_status = _stage_effective_status(s, task_effective)
         stage_color = _stage_effective_color(s_tasks, task_colors)
         stage_done = sum(1 for st in task_effective if st == 'completed')
+        if current is None and stage_status != 'completed':
+            current = s
+            current_overdue_tasks = stage_overdue_tasks
         all_stages.append({
             'id': s.id,
             'name': s.name,
@@ -356,6 +354,11 @@ def _build_product_item(request, product):
 
     progress_pct = int(all_tasks_done / all_tasks_total * 100) if all_tasks_total > 0 else 0
 
+    can_message_stage = bool(
+        current and current.assignee_id and current.assignee_id != request.user.id
+        and current.can_be_managed_by(request.user)
+    )
+
     def _overdue_assignee(task):
         """超期事项的联系人：优先任务负责人，任务没设人时退到阶段负责人。
 
@@ -365,7 +368,7 @@ def _build_product_item(request, product):
         user = task.assignee or task.product_stage.assignee
         return (user.first_name or user.username) if user else ''
 
-    # 卡点：全部超期任务
+    # 卡点：当前阶段的超期任务（点开「已超期」只看拖住当前进度的事）
     overdue_tasks = [
         {
             'name': t.name,
@@ -377,7 +380,7 @@ def _build_product_item(request, product):
             ),
             'stage_name': t.product_stage.name,
         }
-        for t in all_overdue_tasks
+        for t in current_overdue_tasks
     ]
 
     # 时间计算
@@ -393,18 +396,22 @@ def _build_product_item(request, product):
             project_overdue = True
 
     # 状态判定（仅 active 项目有异常/待推进/正常判定）
-    has_overdue = len(all_overdue_tasks) > 0 or (product.status == 'active' and project_overdue)
+    # 超期只看当前阶段；当前阶段没有超期任务时，其他阶段的超期不改变项目状态
+    has_overdue = bool(current_overdue_tasks) or (product.status == 'active' and project_overdue)
+    # 待推进：没有当前阶段（各阶段都已按任务完成），等人把阶段/项目标记完成
+    stage_finished = current is None and all_tasks_total > 0 and all_tasks_done == all_tasks_total
     if product.status == 'active':
         if has_overdue:
             status_label = '已超期'
             status_class = 'overdue'
             block_reason = ''
             block_person = ''
-        elif all_tasks_done == all_tasks_total and all_tasks_total > 0:
+        elif stage_finished:
             status_label = '待推进'
             status_class = 'in_progress'
-            block_reason = '全部任务完成，等待标记阶段'
-            block_person = current.assignee.first_name or current.assignee.username if current and current.assignee else '未指定'
+            block_reason = '全部任务已完成，等待标记阶段/项目完成'
+            owner = product.assignee
+            block_person = (owner.first_name or owner.username) if owner else ''
         else:
             status_label = '进行中'
             status_class = 'completed'
@@ -466,7 +473,6 @@ def _build_product_item(request, product):
         'block_person': block_person,
         'can_delete': _can_delete_product(product, request.user),
         'product_status': product.status,
-        '_stage_order': current.order if current else 0,
     }
 
 
