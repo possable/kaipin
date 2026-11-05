@@ -40,7 +40,8 @@ class KanbanPaginationTests(TestCase):
         self.assertEqual(len(second_page.context['products']), 1)
 
     def test_all_project_status_views_use_the_same_page_size(self):
-        # 没有 'completed' —— 已完成的项目已经从看板搬到「上架归档」页了
+        # 没有 'completed'/'cancelled' —— 这两类已经搬到「项目归档」页了，
+        # 旧书签会落回「全部」
         for status in ('all', 'active', 'overdue', 'cancelled', 'draft'):
             with self.subTest(status=status):
                 response = self.client.get(reverse('kanban'), {'status': status})
@@ -50,7 +51,8 @@ class KanbanPaginationTests(TestCase):
 
 
 class ArchiveViewTests(TestCase):
-    """上架归档页：已完成的项目只出现在这里，不再出现在进度看板。"""
+    """项目归档页：已上架（completed）和已取消（cancelled）分两个大类，
+    都只出现在这里，不再出现在进度看板。"""
 
     def setUp(self):
         self.admin = User.objects.create_user(
@@ -68,28 +70,74 @@ class ArchiveViewTests(TestCase):
         self.completed = Product.objects.create(
             name='已完成的品', creator=self.admin, status='completed',
         )
+        self.cancelled = Product.objects.create(
+            name='已取消的品', creator=self.admin, status='cancelled',
+            actual_end_date=timezone.now(),
+        )
         self.running = Product.objects.create(
             name='进行中的品', creator=self.admin, status='active',
         )
 
-    def test_archive_lists_only_completed_projects(self):
+    def test_archive_defaults_to_completed_category(self):
         self.client.force_login(self.admin)
 
         response = self.client.get(reverse('archive'))
 
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['archive_status'], 'completed')
         self.assertEqual(
             [p['name'] for p in response.context['products']],
             ['已完成的品'],
         )
 
-    def test_kanban_no_longer_lists_completed_projects(self):
+    def test_cancelled_category_lists_cancelled_projects(self):
+        self.client.force_login(self.admin)
+
+        response = self.client.get(reverse('archive'), {'status': 'cancelled'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['archive_status'], 'cancelled')
+        self.assertEqual(
+            [p['name'] for p in response.context['products']],
+            ['已取消的品'],
+        )
+
+    def test_category_counts_are_global(self):
+        """两个大类卡片上的数字不受搜索/负责人筛选影响。"""
+        self.client.force_login(self.admin)
+
+        response = self.client.get(
+            reverse('archive'), {'status': 'cancelled', 'q': '不存在的品'},
+        )
+
+        self.assertEqual(response.context['completed_count'], 1)
+        self.assertEqual(response.context['cancelled_count'], 1)
+        self.assertEqual(list(response.context['products']), [])
+
+    def test_unknown_status_falls_back_to_completed(self):
+        self.client.force_login(self.admin)
+
+        response = self.client.get(reverse('archive'), {'status': 'whatever'})
+
+        self.assertEqual(response.context['archive_status'], 'completed')
+
+    def test_kanban_no_longer_lists_archived_projects(self):
         self.client.force_login(self.admin)
 
         body = self.client.get(reverse('kanban')).content.decode()
 
         self.assertNotIn('已完成的品', body)
+        self.assertNotIn('已取消的品', body)
         self.assertIn('进行中的品', body)
+
+    def test_legacy_cancelled_status_link_falls_back_to_all(self):
+        """看板不再有「已取消」分类，旧书签 ?status=cancelled 落回全部。"""
+        self.client.force_login(self.admin)
+
+        response = self.client.get(reverse('kanban'), {'status': 'cancelled'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['status_filter'], 'all')
 
     def test_legacy_completed_status_link_falls_back_to_all(self):
         """旧书签 ?status=completed 不能让看板报错或给一张空表。"""
@@ -435,3 +483,57 @@ class KanbanSortingTests(TestCase):
             [p['name'] for p in response.context['products']],
             ['晚开始', '早开始', '还没开始'],
         )
+
+
+class KanbanPausedProductTests(TestCase):
+    """暂停的项目在看板上显示「已暂停」，且不再因为超期任务被标成已超期。"""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username='paused-admin', password='test-password',
+        )
+        self.admin.profile.role = 'admin'
+        self.admin.profile.save()
+        self.client.force_login(self.admin)
+        self.department = Department.objects.create(name='暂停看板部')
+
+        self.product = Product.objects.create(
+            name='暂停看板品', creator=self.admin,
+        )
+        stage = ProductStage.objects.create(
+            product=self.product, name='阶段1', order=1,
+            department=self.department, status='in_progress',
+            started_at=timezone.now() - timedelta(days=10),
+        )
+        Task.objects.create(
+            product_stage=stage, name='超期任务', order=1, status='in_progress',
+            started_at=timezone.now() - timedelta(days=5),
+            expected_end_date=timezone.localdate() - timedelta(days=1),
+        )
+
+    def _item(self, **params):
+        response = self.client.get(reverse('kanban'), params)
+        return response, next(
+            (p for p in response.context['products'] if p['name'] == '暂停看板品'),
+            None,
+        )
+
+    def test_paused_product_is_not_overdue(self):
+        self.product.pause()
+
+        _, item = self._item()
+
+        self.assertEqual(item['status_label'], '已暂停')
+        self.assertFalse(item['has_overdue'])
+        self.assertEqual(item['overdue_tasks'], [])
+
+    def test_paused_filter_lists_the_product(self):
+        self.product.pause()
+
+        listed, _ = self._item(status='paused')
+        overdue, _ = self._item(status='overdue')
+
+        self.assertEqual(
+            [p['name'] for p in listed.context['products']], ['暂停看板品'],
+        )
+        self.assertEqual(list(overdue.context['products']), [])

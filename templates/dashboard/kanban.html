@@ -6,7 +6,8 @@
         <h2>产品研发进度看板</h2>
         <div class="subtitle">全景掌控产品研发进展，协同管理，高效推进，按时交付</div>
     </div>
-    {% if user.profile.is_admin %}
+    {# 与后端 can_create_product() 和左侧栏保持一致：管理员或产品部成员都能建项目 #}
+    {% if user.profile.is_admin or user.profile.department.name == '产品部' %}
     <a href="{% url 'product_create' %}" class="btn btn-primary">
         <i class="bi bi-plus-lg"></i> 新建项目
     </a>
@@ -62,7 +63,7 @@
             <option value="active" {% if status_filter == 'active' %}selected{% endif %}>进行中</option>
             <option value="overdue" {% if status_filter == 'overdue' %}selected{% endif %}>已超期</option>
             <option value="draft" {% if status_filter == 'draft' %}selected{% endif %}>待开始</option>
-            <option value="cancelled" {% if status_filter == 'cancelled' %}selected{% endif %}>已取消</option>
+            <option value="paused" {% if status_filter == 'paused' %}selected{% endif %}>已暂停</option>
         </select>
     </div>
     <div class="field">
@@ -211,7 +212,7 @@
     <div class="empty-state">
         <i class="bi bi-inbox"></i>
         <p>暂无相关项目</p>
-        {% if user.profile.is_admin %}
+        {% if user.profile.is_admin or user.profile.department.name == '产品部' %}
         <p style="margin-top:8px;font-size:13px;">
             <a href="{% url 'product_create' %}" style="color:var(--green);">
                 <i class="bi bi-plus-lg"></i> 点击这里新建项目
@@ -307,7 +308,7 @@
 const ALL_USERS = [{% for u in all_users %}{id:{{u.id}},name:"{{u.first_name|default:u.username|escapejs}}"}{% if not forloop.last %},{% endif %}{% endfor %}];
 
 </script>
-<script src="{% static 'js/app.js' %}?v=20260930-profile1"></script>
+<script src="{% static 'js/app.js' %}?v=20261103-nodelete"></script>
 <script>
 const assigneeInput = document.getElementById('assignee-input');
 if (assigneeInput) {

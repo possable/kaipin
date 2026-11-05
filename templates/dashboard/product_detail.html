@@ -10,7 +10,7 @@
             <i class="bi bi-arrow-left"></i> 返回看板
         </a>
         <h2>{{ product.name }}</h2>
-        <span class="status-badge {% if product.status == 'active' %}in_progress{% elif product.status == 'completed' %}completed{% else %}overdue{% endif %}">
+        <span class="status-badge {% if product.status == 'active' %}in_progress{% elif product.status == 'completed' %}completed{% elif product.status == 'paused' %}paused{% else %}overdue{% endif %}">
             {{ product.get_status_display }}
         </span>
     </div>
@@ -67,6 +67,80 @@
     </div>
     {% endfor %}
 </div>
+
+{% if setup_mode %}
+{# 新建项目后的引导窗口：趁创建人还在页面上，把各阶段负责人和起止时间补齐 #}
+<div id="setup-modal-overlay" class="modal-overlay" onclick="closeSetupModal(event)">
+    <div class="modal-box setup-modal-box" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <span>设置项目流程</span>
+            <button type="button" class="modal-close-btn" onclick="closeSetupModal(event)" title="关闭">
+                <i class="bi bi-x-lg"></i>
+            </button>
+        </div>
+        <form id="setup-stages-form" method="post" action="{% url 'product_setup_stages' product.pk %}">
+            {% csrf_token %}
+            <div class="modal-body">
+                <p class="setup-intro">
+                    项目「{{ product.name }}」已创建并发布。
+                    项目周期：{{ product.started_at|date:'Y-m-d' }} 至 {{ product.expected_end_date|date:'Y-m-d' }}。
+                    请为各阶段指定负责人和起止时间，也可以先「稍后设置」，之后在项目详情里随时补填。
+                </p>
+                <table class="setup-table">
+                    <thead>
+                        <tr>
+                            <th>阶段</th>
+                            <th>阶段负责人</th>
+                            <th>开始时间</th>
+                            <th>结束时间</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for stage in stages %}
+                        <tr data-setup-row data-stage-name="{{ stage.name }}">
+                            <td>
+                                <strong>{{ stage.order }}. {{ stage.name }}</strong>
+                                <div class="setup-dept">{{ stage.department.name }}</div>
+                            </td>
+                            <td>
+                                <input type="text" class="form-input user-search setup-assignee"
+                                       list="users-datalist" autocomplete="off"
+                                       data-hidden-target="setup-assignee-{{ stage.pk }}"
+                                       placeholder="搜索阶段负责人..."
+                                       value="{% if stage.assignee %}{{ stage.assignee.first_name|default:stage.assignee.username }}{% endif %}">
+                                <input type="hidden" name="assignee_{{ stage.pk }}"
+                                       id="setup-assignee-{{ stage.pk }}"
+                                       value="{{ stage.assignee_id|default:'' }}">
+                            </td>
+                            <td>
+                                <input type="date" class="form-input setup-start"
+                                       name="started_at_{{ stage.pk }}"
+                                       value="{{ stage.started_at|date:'Y-m-d' }}"
+                                       min="{{ product.started_at|date:'Y-m-d' }}"
+                                       max="{{ product.expected_end_date|date:'Y-m-d' }}">
+                            </td>
+                            <td>
+                                <input type="date" class="form-input setup-end"
+                                       name="expected_end_date_{{ stage.pk }}"
+                                       value="{{ stage.expected_end_date|date:'Y-m-d' }}"
+                                       min="{{ product.started_at|date:'Y-m-d' }}"
+                                       max="{{ product.expected_end_date|date:'Y-m-d' }}">
+                            </td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline btn-sm" onclick="closeSetupModal(event)">稍后设置</button>
+                <button type="submit" class="btn btn-primary btn-sm">
+                    <i class="bi bi-check-lg"></i> 保存并进入项目
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block extra_js %}
@@ -74,5 +148,65 @@
 // 所有用户列表（供 JS 使用）
 const ALL_USERS = [{% for u in all_users %}{id:{{u.id}},name:"{{u.first_name|default:u.username|escapejs}}"}{% if not forloop.last %},{% endif %}{% endfor %}];
 </script>
-<script src="{% static 'js/app.js' %}?v=20260930-profile1"></script>
+<script src="{% static 'js/app.js' %}?v=20261103-nodelete"></script>
+{% if setup_mode %}
+<script>
+// 关闭「设置项目流程」窗口：右上角 ×、点遮罩空白处、Esc、稍后设置都走这里。
+// 只收起窗口并把地址栏的 ?setup=1 去掉，不提交、不刷新页面。
+function closeSetupModal(event) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+    const overlay = document.getElementById('setup-modal-overlay');
+    if (overlay) overlay.remove();
+    const url = new URL(window.location.href);
+    url.searchParams.delete('setup');
+    window.history.replaceState(null, '', url.pathname + url.search);
+}
+
+document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && document.getElementById('setup-modal-overlay')) {
+        closeSetupModal();
+    }
+});
+
+// 「设置项目流程」窗口：负责人输入的是姓名，提交时后端只认 id，这里同步到隐藏字段
+(function () {
+    const form = document.getElementById('setup-stages-form');
+    if (!form) return;
+
+    function syncAssignee(input) {
+        const hidden = document.getElementById(input.dataset.hiddenTarget);
+        if (!hidden) return;
+        const name = input.value.trim();
+        let uid = '';
+        if (name) {
+            document.querySelectorAll('#users-datalist option').forEach(function (opt) {
+                if (opt.value === name) uid = opt.dataset.id || '';
+            });
+        }
+        hidden.value = uid;
+    }
+
+    form.querySelectorAll('.setup-assignee').forEach(function (input) {
+        input.addEventListener('input', function () { syncAssignee(input); });
+        syncAssignee(input);
+    });
+
+    form.addEventListener('submit', function (event) {
+        const rows = form.querySelectorAll('[data-setup-row]');
+        for (const row of rows) {
+            const start = row.querySelector('.setup-start').value;
+            const end = row.querySelector('.setup-end').value;
+            if (start && end && start > end) {
+                event.preventDefault();
+                showToast(`「${row.dataset.stageName}」的开始时间不能晚于结束时间`, 'error');
+                return;
+            }
+        }
+    });
+})();
+</script>
+{% endif %}
 {% endblock %}

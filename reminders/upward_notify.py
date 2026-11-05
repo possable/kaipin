@@ -22,6 +22,19 @@ _EVENT_LABEL = {'completed': '完成', 'overdue': '超期'}
 _TARGET_TYPE_MAP = {'Task': 'task', 'ProductStage': 'stage', 'Product': 'product'}
 
 
+def _entity_product(entity):
+    """拿到实体所属的 Product（Task → 阶段 → 品）"""
+    from products.models import Task, ProductStage, Product
+
+    if isinstance(entity, Task):
+        return entity.product_stage.product
+    if isinstance(entity, ProductStage):
+        return entity.product
+    if isinstance(entity, Product):
+        return entity
+    return None
+
+
 def _resolve_recipients_and_context(entity):
     """返回 (收件人列表, 品名, 阶段名或None, 任务名或None)"""
     from products.models import Task, ProductStage, Product
@@ -50,6 +63,10 @@ def notify_upward(entity, event_type, actor=None):
     actor: 触发本次状态变更的操作人（User 或 None）；若上级负责人恰好是 actor 本人则跳过通知。
     """
     try:
+        product = _entity_product(entity)
+        # 暂停的项目不发任何通知：阶段/任务照常能改，但不再打扰任何人
+        if product is not None and product.status == 'paused':
+            return
         recipients, product_name, stage_name, task_name = _resolve_recipients_and_context(entity)
     except Exception:
         logger.exception('notify_upward 解析收件人失败: entity=%r', entity)

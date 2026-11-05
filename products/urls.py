@@ -30,8 +30,10 @@ urlpatterns += [
     path('stages/<int:stage_id>/start/', views.stage_start, name='stage_start'),
     path('stages/<int:stage_id>/update-field/', views.stage_update_field, name='stage_update_field'),
     path('<int:pk>/cancel/', views.product_cancel, name='product_cancel'),
-    path('<int:pk>/delete/', views.product_delete, name='product_delete'),
+    path('<int:pk>/pause/', views.product_pause, name='product_pause'),
+    path('<int:pk>/resume/', views.product_resume, name='product_resume'),
     path('<int:pk>/publish/', views.product_publish, name='product_publish'),
+    path('<int:pk>/setup-stages/', views.product_setup_stages, name='product_setup_stages'),
     path('<int:pk>/update-field/', views.product_update_field, name='product_update_field'),
     path('<int:pk>/update-profile/', views.product_update_profile, name='product_update_profile'),
 ]

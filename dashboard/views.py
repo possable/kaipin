@@ -42,12 +42,13 @@ def _stage_icon(name):
 
 
 def _kanban_products_for(user):
-    """看板上应该出现的项目：可见性过滤 + 排除已完成。
+    """看板上应该出现的项目：可见性过滤 + 排除已完成/已取消。
 
-    已完成的项目全部归「上架归档」页。抽成函数是为了让主查询集和 kpi_total
-    用的是同一条规则 —— 两处各写一遍的话，很容易出现卡片数字和表格条数对不上。
+    已完成（上架）和已取消的项目都归「项目归档」页。抽成函数是为了让主查询集
+    和 kpi_total 用的是同一条规则 —— 两处各写一遍的话，很容易出现卡片数字和
+    表格条数对不上。
     """
-    return visible_products_for(user).exclude(status='completed')
+    return visible_products_for(user).exclude(status__in=['completed', 'cancelled'])
 
 
 def _stage_effective_status(stage, task_statuses):
@@ -96,7 +97,7 @@ def _stage_kpi_counts(user, stage_names):
 
 @login_required
 def kanban(request):
-    """统一看板：通过状态筛选按钮和下拉筛选查看所有品（不含已完成，那些在上架归档页）"""
+    """统一看板：通过状态筛选按钮和下拉筛选查看所有品（不含已完成/已取消，那些在项目归档页）"""
     # 获取筛选参数
     q = request.GET.get('q', '').strip()
     assignee_id = request.GET.get('assignee', '').strip()
@@ -112,10 +113,11 @@ def kanban(request):
     products = _kanban_products_for(request.user)
     if status_filter == 'overdue':
         products = products.filter(status='active')
-    elif status_filter in ('active', 'cancelled', 'draft'):
+    elif status_filter in ('active', 'draft', 'paused'):
         products = products.filter(status=status_filter)
     elif status_filter != 'all':
-        # 含旧的 ?status=completed 书签，落回「全部」而不是给一张空表
+        # 含旧的 ?status=completed / ?status=cancelled 书签：这两类已经搬到
+        # 项目归档页，落回「全部」而不是给一张空表
         status_filter = 'all'
 
     products = products.prefetch_related('stages__tasks')
@@ -168,7 +170,7 @@ def kanban(request):
             assignee_id = ''
 
     # 获取阶段模板用于排序。最后一环（上架归档）不出 KPI 卡片 —— 看板不展示已完成项目，
-    # 那张卡本来就是在数已完成，留在这里会永远显示 0。入口在左侧导航「上架归档」。
+    # 那张卡本来就是在数已完成，留在这里会永远显示 0。入口在左侧导航「项目归档」。
     stage_templates_ordered = list(StageTemplate.objects.order_by('order'))
     kpi_stage_templates = stage_templates_ordered[:-1]
 
@@ -266,14 +268,6 @@ def kanban(request):
     })
 
 
-def _can_delete_product(product, user):
-    """能不能彻底删除这个品：进行中的不能删（要先取消），其余看管理权限。
-
-    看板和上架归档都走这一处，免得两个页面的删除按钮出现不一样的判断。
-    """
-    return product.status != 'active' and product.can_be_managed_by(user)
-
-
 def _product_duration_days(product):
     """从开始到实际完成过了多少天。缺任一端返回 None，模板显示 --。
 
@@ -368,7 +362,8 @@ def _build_product_item(request, product):
         user = task.assignee or task.product_stage.assignee
         return (user.first_name or user.username) if user else ''
 
-    # 卡点：当前阶段的超期任务（点开「已超期」只看拖住当前进度的事）
+    # 卡点：当前阶段的超期任务（点开「已超期」只看拖住当前进度的事）。
+    # 暂停的项目不算超期 —— 暂停期间不催办，恢复后再按原日期判定。
     overdue_tasks = [
         {
             'name': t.name,
@@ -380,7 +375,7 @@ def _build_product_item(request, product):
             ),
             'stage_name': t.product_stage.name,
         }
-        for t in current_overdue_tasks
+        for t in (current_overdue_tasks if product.status != 'paused' else [])
     ]
 
     # 时间计算
@@ -397,7 +392,10 @@ def _build_product_item(request, product):
 
     # 状态判定（仅 active 项目有异常/待推进/正常判定）
     # 超期只看当前阶段；当前阶段没有超期任务时，其他阶段的超期不改变项目状态
-    has_overdue = bool(current_overdue_tasks) or (product.status == 'active' and project_overdue)
+    has_overdue = (
+        product.status == 'active'
+        and (bool(current_overdue_tasks) or project_overdue)
+    )
     # 待推进：没有当前阶段（各阶段都已按任务完成），等人把阶段/项目标记完成
     stage_finished = current is None and all_tasks_total > 0 and all_tasks_done == all_tasks_total
     if product.status == 'active':
@@ -420,6 +418,11 @@ def _build_product_item(request, product):
     elif product.status == 'draft':
         status_label = '待开始'
         status_class = 'pending'
+        block_reason = ''
+        block_person = ''
+    elif product.status == 'paused':
+        status_label = '已暂停'
+        status_class = 'paused'
         block_reason = ''
         block_person = ''
     elif product.status == 'completed':
@@ -471,7 +474,6 @@ def _build_product_item(request, product):
         'has_overdue': has_overdue,
         'block_reason': block_reason,
         'block_person': block_person,
-        'can_delete': _can_delete_product(product, request.user),
         'product_status': product.status,
     }
 
@@ -543,16 +545,22 @@ def export_csv(request):
 
 @login_required
 def archive(request):
-    """上架归档：已完成的项目，表格 + 筛选。
+    """项目归档：上架项目（已完成）和取消项目分两个大类，表格 + 筛选。
 
     项目变 completed 没有专门的按钮 —— 最后一个阶段被标记完成时由
     ProductStage.complete() 自动置位（products/models.py），所以「完成即归档」
-    是自然衔接的。看板那边用 _kanban_products_for() 把已完成排除掉，
-    两张页面的可见性规则保持一致（普通成员只看到自己相关的项目）。
+    是自然衔接的。cancelled 则由 product_cancel 置位，取消时一并补写
+    actual_end_date 作为归档时间。看板那边用 _kanban_products_for() 把这两类
+    都排除掉，两张页面的可见性规则保持一致（普通成员只看到自己相关的项目）。
 
     这里没有复用 _build_product_item：那个函数主要是为了算阶段进度和超期，
-    已完成的项目一个进行中阶段都没有，算出来全是恒定的空值，白跑一遍任务遍历。
+    归档项目一个进行中阶段都没有，算出来全是恒定的空值，白跑一遍任务遍历。
     """
+    ARCHIVE_STATUSES = ('completed', 'cancelled')
+    archive_status = request.GET.get('status', 'completed')
+    if archive_status not in ARCHIVE_STATUSES:
+        archive_status = 'completed'
+
     q = request.GET.get('q', '').strip()
     assignee_id = request.GET.get('assignee', '').strip()
     brand_filter = request.GET.get('brand', '').strip()
@@ -560,11 +568,15 @@ def archive(request):
     date_from = request.GET.get('date_from', '').strip()
     date_to = request.GET.get('date_to', '').strip()
 
+    base = visible_products_for(request.user).filter(status__in=ARCHIVE_STATUSES)
+    # 两个大类的数字是全局口径：切换分类、加筛选都不影响卡片上的总数
+    completed_count = base.filter(status='completed').count()
+    cancelled_count = base.filter(status='cancelled').count()
+
     products = (
-        visible_products_for(request.user)
-        .filter(status='completed')
+        base.filter(status=archive_status)
         .select_related('assignee')
-        # 最近完成的排前面；actual_end_date 理论上都有值（complete() 里写的），
+        # 最近归档的排前面；actual_end_date 理论上都有值（complete()/取消时写的），
         # 兜个底免得 NULL 在 PostgreSQL 的 DESC 下反而排到最前
         .order_by(F('actual_end_date').desc(nulls_last=True), '-created_at')
     )
@@ -596,7 +608,8 @@ def archive(request):
             if assignee_user:
                 assignee_name = assignee_user.first_name or assignee_user.username
 
-    # 完成时间范围。这里绝对不能用 __date 查询 —— 这台 MySQL 没加载时区表，
+    # 归档时间范围（已完成=完成时间，已取消=取消时间，都落在 actual_end_date）。
+    # 这里绝对不能用 __date 查询 —— 这台 MySQL 没加载时区表，
     # Django 会把 __date 翻译成 DATE(CONVERT_TZ(col,'UTC','Asia/Shanghai'))，
     # 而 CONVERT_TZ 在时区表缺失时返回 NULL，结果是恒不匹配、还不报错。
     # 所以照看板筛创建时间的写法，按本地日期算出 aware 边界再比大小：
@@ -629,7 +642,8 @@ def archive(request):
             'start_date': tz.localtime(p.started_at).date() if p.started_at else None,
             'end_date': tz.localtime(p.actual_end_date) if p.actual_end_date else None,
             'duration_days': _product_duration_days(p),
-            'can_delete': _can_delete_product(p, request.user),
+            'status': p.status,
+            'status_label': p.get_status_display(),
         }
         for p in products
     ]
@@ -639,6 +653,9 @@ def archive(request):
     return render(request, 'dashboard/archive.html', {
         'products': page_obj,
         'page_obj': page_obj,
+        'archive_status': archive_status,
+        'completed_count': completed_count,
+        'cancelled_count': cancelled_count,
         'has_products': bool(rows),
         'has_filter': bool(
             q or assignee_id or brand_filter or category_filter or date_from or date_to

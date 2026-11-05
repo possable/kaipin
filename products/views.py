@@ -1,8 +1,10 @@
+import logging
 from urllib.parse import quote
 
 from django.db import models
 from django.contrib.auth.models import User
 from django.shortcuts import render, redirect, get_object_or_404
+from django.urls import reverse
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
@@ -22,6 +24,8 @@ from reminders.wechat import send_message_to_user
 from django.conf import settings
 
 from .progress_export import render_product_progress_png
+
+logger = logging.getLogger(__name__)
 
 
 def _month_start(value):
@@ -211,6 +215,100 @@ def _notify_new_assignee(entity, old_assignee, new_assignee, changed_by, context
         pass  # 通知是非关键路径，失败不影响主流程
 
 
+def _fmt_notify_date(value):
+    return value.strftime('%Y-%m-%d') if value else '待填写'
+
+
+def _notify_project_kickoff(product, actor):
+    """项目立项后通知项目负责人和各阶段负责人。
+
+    收件人按主身份企业发送（见 reminders.wechat.send_message_to_user），
+    没绑企微的人由它返回 False，这里静默跳过。任何异常都只记日志，
+    绝不影响「项目已创建成功」这条主流程。
+    """
+    stages = list(
+        product.stages.select_related('assignee').order_by('order')
+    )
+    product_start = _fmt_notify_date(
+        timezone.localtime(product.started_at).date() if product.started_at else None
+    )
+    product_end = _fmt_notify_date(product.expected_end_date)
+    first_stage = stages[0] if stages else None
+
+    def send(recipient, content):
+        recipient_name = recipient.first_name or recipient.username
+        try:
+            success = send_message_to_user(recipient, content)
+        except Exception:
+            logger.exception(
+                '立项通知发送异常，已跳过: product=%s recipient=%s',
+                product.pk, recipient.username,
+            )
+            return
+        if not success:
+            return
+        try:
+            log_action(
+                actor, '发送立项通知', 'user', recipient.pk, recipient_name,
+                f'项目「{product.name}」已发送企微通知',
+            )
+        except Exception:
+            logger.exception('立项通知写操作日志失败: product=%s', product.pk)
+
+    # 1. 项目负责人
+    if product.assignee_id:
+        owner = product.assignee
+        owner_name = owner.first_name or owner.username
+        lines = [
+            f'{owner_name}你好，我是项目管理智能机器人。',
+            f'你负责的项目「{product.name}」已立项。',
+            f'开始时间：{product_start}　预计结束：{product_end}',
+        ]
+        if first_stage:
+            lines.append(
+                f'共 {len(stages)} 个阶段，首个阶段「{first_stage.name}」已开始。'
+            )
+        else:
+            lines.append(f'共 {len(stages)} 个阶段。')
+        lines.append(f'点击查看：{settings.SITE_URL}')
+        send(owner, '\n'.join(lines))
+
+    # 2. 阶段负责人：同一个人负责多个阶段只发一条；项目负责人本人不再重复收
+    grouped = {}
+    for stage in stages:
+        if not stage.assignee_id:
+            continue
+        if stage.assignee_id == product.assignee_id:
+            continue
+        grouped.setdefault(stage.assignee_id, []).append(stage)
+
+    for owned_stages in grouped.values():
+        recipient = owned_stages[0].assignee
+        recipient_name = recipient.first_name or recipient.username
+        if len(owned_stages) == 1:
+            stage = owned_stages[0]
+            lines = [
+                f'{recipient_name}你好，我是项目管理智能机器人。',
+                f'你被安排为「{product.name}」项目「{stage.name}」阶段的负责人。',
+                f'项目开始：{product_start}　项目预计结束：{product_end}',
+                f'阶段预计结束：{_fmt_notify_date(stage.expected_end_date)}',
+            ]
+        else:
+            stage_names = '」「'.join(stage.name for stage in owned_stages)
+            stage_ends = '；'.join(
+                f'「{stage.name}」{_fmt_notify_date(stage.expected_end_date)}'
+                for stage in owned_stages
+            )
+            lines = [
+                f'{recipient_name}你好，我是项目管理智能机器人。',
+                f'你被安排为「{product.name}」项目「{stage_names}」阶段的负责人。',
+                f'项目开始：{product_start}　项目预计结束：{product_end}',
+                f'阶段预计结束：{stage_ends}',
+            ]
+        lines.append(f'点击查看：{settings.SITE_URL}')
+        send(recipient, '\n'.join(lines))
+
+
 def _parse_dt(value):
     """兼容 date 输入（'Y-m-d'）和 datetime-local 输入（'Y-m-dTH:M'）。
     项目 USE_TZ=True，返回带当前时区的 aware datetime。"""
@@ -385,10 +483,112 @@ def product_create(request):
         stage_note = f'，首阶段「{first_stage.name}」已开始' if first_stage else ''
         log_action(request.user, '创建新品', 'product', product.id, product.name,
                    f'已发布，共 {product.stages.count()} 个阶段{stage_note}')
+        # 阶段和模板里的默认负责人已落位，给项目负责人和阶段负责人发立项通知
+        _notify_project_kickoff(product, request.user)
         messages.success(request, f'新品 "{name}" 已创建并发布，项目正式开始。')
-        return redirect('product_detail', pk=product.pk)
+        # 建完直接进「设置项目流程」弹窗：趁管理者还在页面上，把各阶段负责人
+        # 和起止时间一次性补齐；不想现在设置的可以点「稍后设置」。
+        return redirect(f"{reverse('product_detail', args=[product.pk])}?setup=1")
 
     return _render_create_form(request, has_templates, all_users)
+
+
+@login_required
+@require_POST
+def product_setup_stages(request, pk):
+    """新建项目后的「设置项目流程」：一次性保存各阶段的负责人和起止时间。
+
+    权限比单字段编辑宽一档：创建人也算 —— 产品部同事建完项目、总负责人
+    填的是别人时，仍然需要由创建人来分工。
+    """
+    product = get_object_or_404(Product, pk=pk)
+    can_setup = (
+        request.user.profile.is_admin
+        or product.assignee == request.user
+        or product.creator == request.user
+    )
+    if not can_setup:
+        raise PermissionDenied
+
+    stages = list(product.stages.order_by('order'))
+    project_start = (
+        timezone.localtime(product.started_at).date() if product.started_at else None
+    )
+    project_end = product.expected_end_date
+
+    parsed = []
+    errors = []
+    for stage in stages:
+        raw_assignee = request.POST.get(f'assignee_{stage.pk}', '').strip()
+        raw_start = request.POST.get(f'started_at_{stage.pk}', '').strip()
+        raw_end = request.POST.get(f'expected_end_date_{stage.pk}', '').strip()
+
+        assignee = None
+        if raw_assignee:
+            try:
+                assignee = User.objects.get(pk=int(raw_assignee))
+            except (User.DoesNotExist, ValueError):
+                errors.append(f'「{stage.name}」的负责人无效')
+                continue
+
+        start = None
+        if raw_start:
+            try:
+                start = _parse_dt(raw_start)
+            except ValueError:
+                errors.append(f'「{stage.name}」的开始时间格式不正确')
+                continue
+
+        end = None
+        if raw_end:
+            try:
+                end = datetime.strptime(raw_end, '%Y-%m-%d').date()
+            except ValueError:
+                errors.append(f'「{stage.name}」的结束时间格式不正确')
+                continue
+
+        # 与 stage_update_field 保持同一套约束，但按自然日比较：
+        # 项目 started_at 可能带时分，直接比 datetime 会把「今天」误判成
+        # 早于项目开始。
+        if start and end and start.date() > end:
+            errors.append(f'「{stage.name}」的开始时间不能晚于结束时间')
+            continue
+        if start and project_start and start.date() < project_start:
+            errors.append(f'「{stage.name}」的开始时间不能早于项目开始时间')
+            continue
+        if start and project_end and start.date() > project_end:
+            errors.append(f'「{stage.name}」的开始时间不能晚于项目预计结束')
+            continue
+        if end and project_end and end > project_end:
+            errors.append(f'「{stage.name}」的结束时间不能晚于项目预计结束')
+            continue
+        if end and project_start and end < project_start:
+            errors.append(f'「{stage.name}」的结束时间不能早于项目开始时间')
+            continue
+
+        parsed.append((stage, assignee, start, end))
+
+    if errors:
+        messages.error(request, '；'.join(errors) + '。')
+        return redirect(f"{reverse('product_detail', args=[product.pk])}?setup=1")
+
+    for stage, assignee, start, end in parsed:
+        old_assignee = stage.assignee
+        stage.assignee = assignee
+        stage.started_at = start
+        stage.expected_end_date = end
+        stage.save()
+        stage.sync_auto_todo()
+        if old_assignee != assignee:
+            _notify_new_assignee(
+                stage, old_assignee, assignee, request.user,
+                f'「{product.name} · {stage.name}」阶段',
+            )
+
+    log_action(request.user, '设置项目流程', 'product', product.pk, product.name,
+               f'已设置 {len(parsed)} 个阶段的负责人和起止时间')
+    messages.success(request, '项目流程已设置。')
+    return redirect('product_detail', pk=product.pk)
 
 
 def _annotate_stage_permissions(product, stages, user):
@@ -446,11 +646,22 @@ def product_detail(request, pk):
     # 所有用户列表（供负责人选择）
     all_users = User.objects.select_related('profile').order_by('first_name', 'username')
 
+    # ?setup=1：新建项目后的「设置项目流程」窗口。创建人也要能设置，
+    # 否则产品部同事建完项目、负责人填的是别人时，自己进不去这个窗口。
+    can_setup = (
+        request.user.profile.is_admin
+        or product.assignee == request.user
+        or product.creator == request.user
+    )
+    setup_mode = request.GET.get('setup') == '1' and can_setup
+
     return render(request, 'dashboard/product_detail.html', {
         'product': product,
         'stages': stages,
         'is_admin': is_admin,
         'can_manage': can_manage,
+        'can_setup': can_setup,
+        'setup_mode': setup_mode,
         'all_users': all_users,
     })
 
@@ -1169,36 +1380,52 @@ def product_publish(request, pk):
 
 @login_required
 @require_POST
+def product_pause(request, pk):
+    """暂停项目：暂停期间不再发送任何自动通知"""
+    product = get_object_or_404(Product, pk=pk)
+    if not (request.user.profile.is_admin or product.assignee == request.user):
+        return JsonResponse({'error': '无权限操作'}, status=403)
+    if not product.pause():
+        return JsonResponse({'error': '只有进行中的项目可以暂停'}, status=400)
+    log_action(request.user, '暂停项目', 'product', product.id, product.name,
+               '项目暂停，暂停期间不再发送通知')
+    return JsonResponse({'success': True})
+
+
+@login_required
+@require_POST
+def product_resume(request, pk):
+    """恢复被暂停的项目"""
+    product = get_object_or_404(Product, pk=pk)
+    if not (request.user.profile.is_admin or product.assignee == request.user):
+        return JsonResponse({'error': '无权限操作'}, status=403)
+    if not product.resume():
+        return JsonResponse({'error': '只有暂停中的项目可以恢复'}, status=400)
+    log_action(request.user, '恢复项目', 'product', product.id, product.name,
+               '项目恢复，重新开始通知')
+    return JsonResponse({'success': True})
+
+
+@login_required
+@require_POST
 def product_cancel(request, pk):
     """管理员/品负责人取消一个品"""
     product = get_object_or_404(Product, pk=pk)
     if not (request.user.profile.is_admin or product.assignee == request.user):
         return JsonResponse({'error': '无权限操作'}, status=403)
-    if product.status != 'active':
-        return JsonResponse({'error': '只能取消进行中的品'}, status=400)
+    if product.status not in ('active', 'paused'):
+        return JsonResponse({'error': '只能取消进行中或暂停中的品'}, status=400)
     product.status = 'cancelled'
+    # 归档页用 actual_end_date 当「取消时间」排序和筛选，取消时补写；
+    # 只在为空时写，避免覆盖掉已有数据
+    if not product.actual_end_date:
+        product.actual_end_date = timezone.now()
     product.save()
     product.sync_auto_todo()
     log_action(request.user, '取消品', 'product', product.id, product.name,
                f'状态: {product.get_status_display()} → 已取消')
     messages.success(request, f'"{product.name}" 已取消。')
     return redirect('kanban')
-
-
-@login_required
-@require_POST
-def product_delete(request, pk):
-    """管理员/品负责人彻底删除一个品（仅限草稿/已完成/已取消，级联删除全部阶段/任务/附件/日志）"""
-    product = get_object_or_404(Product, pk=pk)
-    if not (request.user.profile.is_admin or product.assignee == request.user):
-        return JsonResponse({'error': '无权限操作'}, status=403)
-    if product.status not in ('draft', 'completed', 'cancelled'):
-        return JsonResponse({'error': '进行中的品不能删除，请先取消'}, status=400)
-    name = product.name
-    log_action(request.user, '删除品', 'product', product.id, name,
-               f'已彻底删除（原状态: {product.get_status_display()}）')
-    product.delete()
-    return JsonResponse({'success': True})
 
 
 @login_required

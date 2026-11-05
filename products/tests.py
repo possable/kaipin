@@ -11,6 +11,7 @@ from django.urls import reverse
 from django.utils import timezone
 from PIL import Image
 from accounts.models import Department
+from activity_log.models import ActivityLog
 from templates_app.models import StageTemplate, TaskTemplate, ChecklistItemTemplate
 from .models import Product, ProductStage, Task
 
@@ -439,74 +440,6 @@ class ProductProgressOverviewTest(TestCase):
         self.assertNotContains(response, '产品生命周期路线图')
 
 
-class ProductDeleteTest(TestCase):
-    def setUp(self):
-        self.dept = Department.objects.create(name='策划部')
-
-        self.admin = User.objects.create_user(username='admin', password='pass')
-        self.admin.profile.department = self.dept
-        self.admin.profile.role = 'admin'
-        self.admin.profile.save()
-
-        self.owner = User.objects.create_user(username='owner', password='pass')
-        self.owner.profile.department = self.dept
-        self.owner.profile.save()
-
-        self.outsider = User.objects.create_user(username='outsider', password='pass')
-        self.outsider.profile.department = self.dept
-        self.outsider.profile.save()
-
-        st = StageTemplate.objects.create(name='阶段1', order=1, department=self.dept)
-        TaskTemplate.objects.create(stage_template=st, name='任务A', order=1)
-
-    def _make_product(self, status, assignee=None):
-        product = Product.objects.create(
-            name=f'测试品-{status}', creator=self.admin, assignee=assignee, status=status,
-        )
-        product.create_stages_from_templates()
-        return product
-
-    def test_admin_can_delete_draft(self):
-        product = self._make_product('draft')
-        self.client.login(username='admin', password='pass')
-        resp = self.client.post(reverse('product_delete', args=[product.pk]))
-        self.assertEqual(resp.status_code, 200)
-        self.assertFalse(Product.objects.filter(pk=product.pk).exists())
-
-    def test_owner_can_delete_completed(self):
-        product = self._make_product('completed', assignee=self.owner)
-        self.client.login(username='owner', password='pass')
-        resp = self.client.post(reverse('product_delete', args=[product.pk]))
-        self.assertEqual(resp.status_code, 200)
-        self.assertFalse(Product.objects.filter(pk=product.pk).exists())
-
-    def test_outsider_cannot_delete(self):
-        product = self._make_product('cancelled', assignee=self.owner)
-        self.client.login(username='outsider', password='pass')
-        resp = self.client.post(reverse('product_delete', args=[product.pk]))
-        self.assertEqual(resp.status_code, 403)
-        self.assertTrue(Product.objects.filter(pk=product.pk).exists())
-
-    def test_cannot_delete_active_product(self):
-        """进行中的品不能直接删除，必须先取消"""
-        product = self._make_product('active', assignee=self.owner)
-        self.client.login(username='admin', password='pass')
-        resp = self.client.post(reverse('product_delete', args=[product.pk]))
-        self.assertEqual(resp.status_code, 400)
-        self.assertTrue(Product.objects.filter(pk=product.pk).exists())
-
-    def test_delete_cascades_stages_and_tasks(self):
-        """删除品会级联删除其阶段和任务"""
-        product = self._make_product('draft')
-        stage_ids = list(product.stages.values_list('id', flat=True))
-        self.assertTrue(stage_ids)
-
-        self.client.login(username='admin', password='pass')
-        self.client.post(reverse('product_delete', args=[product.pk]))
-
-        self.assertEqual(ProductStage.objects.filter(id__in=stage_ids).count(), 0)
-
-
 class TemplateCommentLintTest(SimpleTestCase):
     """全项目模板扫一遍「多行 {# ... #}」—— 放在这里是因为这个坑是在本文件旁边的
     _product_info.html 上踩出来的，但它对**所有**模板都成立。
@@ -535,12 +468,11 @@ class TemplateCommentLintTest(SimpleTestCase):
             + '、'.join(offenders))
 
 
-class ProductDeleteButtonTest(TestCase):
-    """详情页上「删除该品」按钮的可见性。
+class ProductActionButtonsTest(TestCase):
+    """详情页 / 信息弹窗的操作按钮：取消该品保留，彻底删除已下线。
 
-    最容易回归的一点：删除按钮**不能**和取消按钮共用同一个 status 判断。
-    两者绑一起的话，取消成功后按钮会和「取消该品」一起消失，就再也删不掉了 ——
-    而这个品恰恰是唯一允许被删除的状态。
+    删除整个项目会连带抹掉阶段、任务、附件和操作日志，产品系统不再提供这个入口；
+    「取消该品」是唯一的关停方式，历史记录保留。
     """
 
     def setUp(self):
@@ -570,70 +502,42 @@ class ProductDeleteButtonTest(TestCase):
         self.client.login(username=username, password='pass')
         return self.client.get(reverse('product_detail', args=[product.pk]))
 
-    def test_active_product_shows_both_buttons(self):
-        """进行中：两个按钮都在 —— 删除要先点一下被拒，才知道该先取消。"""
+    def test_active_product_shows_cancel_but_no_delete(self):
         product = self._make_product('active', assignee=self.owner)
         resp = self._detail(product, 'owner')
         self.assertContains(resp, '取消该品')
-        self.assertContains(resp, '删除该品')
+        self.assertNotContains(resp, '删除该品')
 
-    def test_cancelled_product_still_shows_delete_button(self):
-        """已取消：取消按钮该消失，删除按钮必须**留下** —— 否则取消完就删不掉了。"""
+    def test_cancelled_product_hides_all_removal_buttons(self):
         product = self._make_product('cancelled', assignee=self.owner)
         resp = self._detail(product, 'owner')
         self.assertNotContains(resp, '取消该品')
-        self.assertContains(resp, '删除该品')
+        self.assertNotContains(resp, '删除该品')
 
     def test_outsider_sees_no_action_buttons(self):
-        """外部人（既非管理员也非品负责人）不该看到这两个按钮。
-
-        can_manage 与删除接口的权限判断是同一个条件（is_admin or 品负责人），
-        所以这里看不到按钮的人，点了也只会拿到 403。
-        """
+        """外部人（既非管理员也非品负责人）不该看到操作按钮。"""
         product = self._make_product('cancelled', assignee=self.owner)
         resp = self._detail(product, 'outsider')
         self.assertNotContains(resp, '删除该品')
         self.assertNotContains(resp, '取消该品')
 
-    def test_template_comment_does_not_leak_into_the_page(self):
-        """模板注释里的文字不能出现在页面上。
-
-        多行 `{# ... #}` 不被 Django 当注释（见 TemplateCommentLintTest），
-        会被原样渲染 —— 页面照常打开，只是多出一段注释，肉眼不盯着看发现不了。
-        """
-        product = self._make_product('active', assignee=self.owner)
-        resp = self._detail(product, 'owner')
-        self.assertNotContains(resp, '操作按钮')
-        self.assertNotContains(resp, 'status 判断')
-
-    def test_info_modal_also_has_the_delete_button(self):
-        """同一份模板还供看板的信息弹窗用，两个入口都得有按钮。
-
-        弹窗才是主要入口（看板上点品名打开的就是它），只测详情页会漏掉真正的高频路径。
-        """
+    def test_info_modal_has_no_delete_button(self):
+        """信息弹窗也走同一份模板，同样不能出现删除入口。"""
         product = self._make_product('active', assignee=self.owner)
         self.client.login(username='owner', password='pass')
         resp = self.client.get(reverse('product_info_modal', args=[product.pk]))
-        self.assertContains(resp, '删除该品')
         self.assertContains(resp, '取消该品')
+        self.assertNotContains(resp, '删除该品')
 
-    def test_cancel_then_delete_succeeds(self):
-        """完整流程：进行中 → 直接删被拒 → 取消 → 删除成功。"""
-        product = self._make_product('active', assignee=self.owner)
-        self.client.login(username='owner', password='pass')
+    def test_delete_endpoint_is_gone(self):
+        """删除接口连同 URL 一起下线：旧链接不能再删掉项目。"""
+        product = self._make_product('cancelled', assignee=self.owner)
+        self.client.login(username='admin', password='pass')
 
-        resp = self.client.post(reverse('product_delete', args=[product.pk]))
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn('请先取消', resp.json()['error'])
+        resp = self.client.post(f'/products/{product.pk}/delete/')
+
+        self.assertEqual(resp.status_code, 404)
         self.assertTrue(Product.objects.filter(pk=product.pk).exists())
-
-        self.client.post(reverse('product_cancel', args=[product.pk]))
-        product.refresh_from_db()
-        self.assertEqual(product.status, 'cancelled')
-
-        resp = self.client.post(reverse('product_delete', args=[product.pk]))
-        self.assertEqual(resp.status_code, 200)
-        self.assertFalse(Product.objects.filter(pk=product.pk).exists())
 
 
 class UpwardNotificationTriggerTest(TestCase):
@@ -740,6 +644,8 @@ class ProductCreatePublishTest(TestCase):
         product = Product.objects.get(name='新品')
 
         self.assertEqual(response.status_code, 302)
+        # 创建完直接进入「设置项目流程」窗口
+        self.assertIn('?setup=1', response.url)
         self.assertEqual(product.status, 'active')
         first_stage = product.stages.order_by('order').first()
         self.assertEqual(first_stage.status, 'in_progress')
@@ -761,3 +667,348 @@ class ProductCreatePublishTest(TestCase):
         ).content.decode()
 
         self.assertEqual(body.count('发布项目'), 1)
+
+
+class ProjectKickoffNotificationTest(TestCase):
+    """立项通知：项目负责人一条，各阶段负责人各一条（去重、排除项目负责人）。"""
+
+    def setUp(self):
+        self.dept = Department.objects.create(name='立项通知部')
+        self.creator = User.objects.create_user(
+            username='kickoff-creator', password='pass',
+        )
+        self.creator.profile.role = 'admin'
+        self.creator.profile.department = self.dept
+        self.creator.profile.save()
+
+        self.owner = User.objects.create_user(
+            username='kickoff-owner', password='pass', first_name='张三',
+        )
+        self.owner.profile.department = self.dept
+        self.owner.profile.wechat_userid = 'wx_owner'
+        self.owner.profile.save()
+
+        self.stage_owner = User.objects.create_user(
+            username='kickoff-stage-owner', password='pass', first_name='李四',
+        )
+        self.stage_owner.profile.department = self.dept
+        self.stage_owner.profile.wechat_userid = 'wx_stage_owner'
+        self.stage_owner.profile.save()
+
+        StageTemplate.objects.create(
+            name='立项', order=1, department=self.dept,
+            default_assignee=self.owner,
+        )
+        StageTemplate.objects.create(
+            name='包装设计', order=2, department=self.dept,
+            default_assignee=self.stage_owner,
+        )
+        self.client.login(username='kickoff-creator', password='pass')
+
+    def _create(self, name='立项通知品'):
+        return self.client.post(reverse('product_create'), {
+            'name': name,
+            'assignee': self.owner.pk,
+            'started_at': timezone.localdate().isoformat(),
+            'expected_end_date': (
+                timezone.localdate() + timedelta(days=60)
+            ).isoformat(),
+            'brand': '跨境自营',
+            'category': '新品开发',
+        })
+
+    def _sent(self, mock_send):
+        """{企微 userid: 消息正文}，便于按收件人断言。"""
+        return {call.args[0]: call.args[1] for call in mock_send.call_args_list}
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_project_owner_and_stage_owner_each_get_one_message(self, mock_send):
+        self._create()
+
+        sent = self._sent(mock_send)
+        self.assertEqual(set(sent), {'wx_owner', 'wx_stage_owner'})
+
+        owner_text = sent['wx_owner']
+        self.assertIn('张三你好，我是项目管理智能机器人。', owner_text)
+        self.assertIn('你负责的项目「立项通知品」已立项。', owner_text)
+        self.assertIn(
+            f'开始时间：{timezone.localdate().isoformat()}　'
+            f'预计结束：{(timezone.localdate() + timedelta(days=60)).isoformat()}',
+            owner_text,
+        )
+        self.assertIn('共 2 个阶段，首个阶段「立项」已开始。', owner_text)
+        self.assertIn(f'点击查看：{settings.SITE_URL}', owner_text)
+
+        stage_text = sent['wx_stage_owner']
+        self.assertIn('李四你好，我是项目管理智能机器人。', stage_text)
+        self.assertIn('你被安排为「立项通知品」项目「包装设计」阶段的负责人。', stage_text)
+        self.assertIn('阶段预计结束：待填写', stage_text)
+        self.assertIn(f'点击查看：{settings.SITE_URL}', stage_text)
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_one_message_per_stage_owner_after_dedupe(self, mock_send):
+        StageTemplate.objects.create(
+            name='打样', order=3, department=self.dept,
+            default_assignee=self.stage_owner,
+        )
+
+        self._create()
+
+        sent = self._sent(mock_send)
+        self.assertEqual(len(mock_send.call_args_list), 2)  # 项目负责人 + 阶段负责人
+        stage_text = sent['wx_stage_owner']
+        self.assertIn('「包装设计」「打样」阶段的负责人', stage_text)
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_stage_owner_without_wechat_is_skipped(self, mock_send):
+        self.stage_owner.profile.wechat_userid = ''
+        self.stage_owner.profile.save()
+
+        response = self._create()
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(set(self._sent(mock_send)), {'wx_owner'})
+        self.assertFalse(
+            ActivityLog.objects.filter(action='发送立项通知', target_id=self.stage_owner.pk).exists()
+        )
+
+    @patch('products.views.send_message_to_user', side_effect=RuntimeError('企微挂了'))
+    def test_send_failure_does_not_break_product_creation(self, mock_send):
+        response = self._create('发送失败也建成功')
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(Product.objects.filter(name='发送失败也建成功').exists())
+        self.assertEqual(mock_send.call_count, 2)
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_project_owner_who_also_owns_a_stage_gets_no_duplicate(self, mock_send):
+        """项目负责人同时是阶段负责人：只发项目立项那一条。"""
+        StageTemplate.objects.filter(name='包装设计').update(default_assignee=self.owner)
+
+        self._create()
+
+        sent = self._sent(mock_send)
+        self.assertEqual(list(sent), ['wx_owner'])
+        self.assertEqual(mock_send.call_count, 1)
+
+
+class ProductCreatePermissionTest(TestCase):
+    """建项目的权限：管理员或「产品部」成员。
+
+    回归点：后端 can_create_product() 和左侧栏都认产品部，但看板右上角
+    的「新建项目」按钮只判断了 is_admin，产品部普通成员看得到侧边栏、
+    却看不到看板上的按钮。
+    """
+
+    def setUp(self):
+        self.product_dept = Department.objects.create(name='产品部')
+        self.other_dept = Department.objects.create(name='策划部')
+
+        self.product_member = User.objects.create_user(
+            username='product-member', password='pass',
+        )
+        self.product_member.profile.department = self.product_dept
+        self.product_member.profile.save()
+
+        self.outsider = User.objects.create_user(
+            username='create-outsider', password='pass',
+        )
+        self.outsider.profile.department = self.other_dept
+        self.outsider.profile.save()
+
+    def test_product_department_member_sees_the_kanban_button(self):
+        self.client.login(username='product-member', password='pass')
+
+        response = self.client.get(reverse('kanban'))
+
+        self.assertContains(response, '新建项目')
+
+    def test_product_department_member_can_open_the_create_page(self):
+        self.client.login(username='product-member', password='pass')
+
+        response = self.client.get(reverse('product_create'))
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_other_department_member_sees_no_entry_and_is_denied(self):
+        self.client.login(username='create-outsider', password='pass')
+
+        self.assertNotContains(self.client.get(reverse('kanban')), '新建项目')
+        response = self.client.get(reverse('product_create'))
+        self.assertEqual(response.status_code, 403)
+
+
+class ProductSetupStagesTest(TestCase):
+    """新建项目后的「设置项目流程」窗口：一次性设置阶段负责人和起止时间。"""
+
+    def setUp(self):
+        self.dept = Department.objects.create(name='产品部')
+        self.other_dept = Department.objects.create(name='策划部')
+
+        self.creator = User.objects.create_user(username='setup-creator', password='pass')
+        self.creator.profile.department = self.dept
+        self.creator.profile.save()
+
+        self.owner = User.objects.create_user(username='setup-owner', password='pass')
+        self.owner.profile.department = self.other_dept
+        self.owner.profile.save()
+
+        # 产品部普通同事：能看到项目（本部门有进行中阶段），但不是创建人/负责人
+        self.outsider = User.objects.create_user(username='setup-outsider', password='pass')
+        self.outsider.profile.department = self.dept
+        self.outsider.profile.save()
+
+        self.today = timezone.localdate()
+        self.product = Product.objects.create(
+            name='设置流程品', creator=self.creator, assignee=self.owner,
+            status='active', started_at=timezone.now(),
+            expected_end_date=self.today + timedelta(days=60),
+        )
+        self.stage1 = ProductStage.objects.create(
+            product=self.product, name='阶段1', order=1,
+            department=self.dept, status='in_progress',
+        )
+        self.stage2 = ProductStage.objects.create(
+            product=self.product, name='阶段2', order=2,
+            department=self.dept, status='pending',
+        )
+
+    def _post(self, **overrides):
+        data = {
+            f'assignee_{self.stage1.pk}': str(self.owner.pk),
+            f'started_at_{self.stage1.pk}': self.today.isoformat(),
+            f'expected_end_date_{self.stage1.pk}': (
+                self.today + timedelta(days=10)
+            ).isoformat(),
+            f'assignee_{self.stage2.pk}': '',
+            f'started_at_{self.stage2.pk}': '',
+            f'expected_end_date_{self.stage2.pk}': '',
+        }
+        data.update(overrides)
+        return self.client.post(
+            reverse('product_setup_stages', args=[self.product.pk]), data,
+        )
+
+    def test_creator_sees_the_setup_window(self):
+        self.client.login(username='setup-creator', password='pass')
+
+        response = self.client.get(
+            reverse('product_detail', args=[self.product.pk]), {'setup': '1'},
+        )
+
+        self.assertContains(response, '设置项目流程')
+        self.assertContains(response, 'setup-stages-form')
+
+    def test_outsider_does_not_see_the_setup_window(self):
+        self.client.login(username='setup-outsider', password='pass')
+
+        response = self.client.get(
+            reverse('product_detail', args=[self.product.pk]), {'setup': '1'},
+        )
+
+        self.assertNotContains(response, 'setup-stages-form')
+
+    def test_setup_saves_assignee_and_dates(self):
+        self.client.login(username='setup-creator', password='pass')
+
+        response = self._post()
+
+        self.assertEqual(response.status_code, 302)
+        self.stage1.refresh_from_db()
+        self.assertEqual(self.stage1.assignee_id, self.owner.pk)
+        self.assertEqual(timezone.localtime(self.stage1.started_at).date(), self.today)
+        self.assertEqual(self.stage1.expected_end_date, self.today + timedelta(days=10))
+
+    def test_start_after_end_is_rejected(self):
+        self.client.login(username='setup-creator', password='pass')
+
+        response = self._post(**{
+            f'started_at_{self.stage1.pk}': (self.today + timedelta(days=20)).isoformat(),
+            f'expected_end_date_{self.stage1.pk}': self.today.isoformat(),
+        })
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('?setup=1', response.url)
+        self.stage1.refresh_from_db()
+        self.assertIsNone(self.stage1.expected_end_date)
+
+    def test_outsider_cannot_submit_setup(self):
+        self.client.login(username='setup-outsider', password='pass')
+
+        response = self._post()
+
+        self.assertEqual(response.status_code, 403)
+        self.stage1.refresh_from_db()
+        self.assertIsNone(self.stage1.assignee_id)
+
+
+class ProductPauseResumeTest(TestCase):
+    """暂停项目：状态变 paused，只影响通知，不动阶段/任务。"""
+
+    def setUp(self):
+        self.dept = Department.objects.create(name='暂停测试部')
+        self.admin = User.objects.create_user(username='pause-admin', password='pass')
+        self.admin.profile.role = 'admin'
+        self.admin.profile.department = self.dept
+        self.admin.profile.save()
+        self.owner = User.objects.create_user(username='pause-owner', password='pass')
+        self.owner.profile.department = self.dept
+        self.owner.profile.save()
+        self.outsider = User.objects.create_user(username='pause-outsider', password='pass')
+        self.outsider.profile.department = self.dept
+        self.outsider.profile.save()
+
+        self.product = Product.objects.create(
+            name='暂停品', creator=self.admin, assignee=self.owner,
+        )
+        self.stage = ProductStage.objects.create(
+            product=self.product, name='阶段1', order=1, department=self.dept,
+            status='in_progress',
+        )
+
+    def test_owner_can_pause_and_resume(self):
+        self.client.login(username='pause-owner', password='pass')
+
+        paused = self.client.post(reverse('product_pause', args=[self.product.pk]))
+        self.product.refresh_from_db()
+        self.assertEqual(paused.status_code, 200)
+        self.assertEqual(self.product.status, 'paused')
+        # 阶段不受影响，恢复后能接着做
+        self.stage.refresh_from_db()
+        self.assertEqual(self.stage.status, 'in_progress')
+
+        resumed = self.client.post(reverse('product_resume', args=[self.product.pk]))
+        self.product.refresh_from_db()
+        self.assertEqual(resumed.status_code, 200)
+        self.assertEqual(self.product.status, 'active')
+
+    def test_only_active_can_be_paused(self):
+        self.product.status = 'completed'
+        self.product.save()
+        self.client.login(username='pause-admin', password='pass')
+
+        response = self.client.post(reverse('product_pause', args=[self.product.pk]))
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_outsider_cannot_pause(self):
+        self.client.login(username='pause-outsider', password='pass')
+
+        response = self.client.post(reverse('product_pause', args=[self.product.pk]))
+
+        self.assertEqual(response.status_code, 403)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.status, 'active')
+
+    def test_paused_product_can_still_be_cancelled(self):
+        self.product.status = 'paused'
+        self.product.save()
+        self.client.login(username='pause-admin', password='pass')
+
+        response = self.client.post(reverse('product_cancel', args=[self.product.pk]))
+
+        self.product.refresh_from_db()
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.product.status, 'cancelled')
+        # 取消时间写入 actual_end_date，项目归档页按它排序/筛选
+        self.assertIsNotNone(self.product.actual_end_date)

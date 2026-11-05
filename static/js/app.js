@@ -172,6 +172,77 @@ function hasDirty() {
     return DIRTY_FIELDS.size > 0;
 }
 
+// 把还没保存的字段改动提交掉，返回失败信息数组（空数组 = 全部成功）。
+// 弹窗内「添加任务 / 删除任务 / 上下移动」这类操作会重新拉取片段重绘内容，
+// 重绘前必须先落库：否则用户刚填的时间、执行人还在 dirty 里没提交，
+// 重绘后被服务端的旧数据覆盖，看起来就像"被刷新清空了"。
+// root 用来找产品资料表单（整表提交，不在 DIRTY_FIELDS 里）。
+async function flushDirtyFields(root = document) {
+    // 串行提交所有 dirty 字段：同实体字段有前后依赖（如 started_at vs expected_end_date），
+    // 并发会因层级校验用旧值而失败，串行保证每次校验用的都是最新 DB 状态。
+    // 优先提交 expected_end_date，再提交 started_at，避免"扩大时间范围时开始时间被旧结束时间卡住"
+    const entries = Array.from(DIRTY_FIELDS.entries())
+        .filter(([el, info]) => info.url && el.isConnected)
+        .sort(([, a], [, b]) => {
+            const order = {expected_end_date: 0, started_at: 1};
+            return (order[a.field] ?? 2) - (order[b.field] ?? 2);
+        });
+    const failures = [];
+    for (const [el, info] of entries) {
+        const fd = new FormData();
+        if (info.field === 'notes') {
+            // checklist_item_save_notes 接口用专属参数名 notes，不是通用的 field/value
+            fd.append('notes', info.value);
+        } else {
+            fd.append('field', info.field);
+            fd.append('value', info.value);
+        }
+        try {
+            const resp = await postJSON(info.url, fd);
+            if (resp.ok) {
+                DIRTY_FIELDS.delete(el);
+                el.classList.remove('is-dirty');
+            } else {
+                let errMsg = `HTTP ${resp.status}`;
+                try { const data = await resp.json(); errMsg = data.error || errMsg; } catch (_) {}
+                console.error('字段保存失败:', info, errMsg);
+                failures.push(`${info.field}: ${errMsg}`);
+            }
+        } catch (e) {
+            console.error('字段保存异常:', info, e);
+            failures.push(`${info.field}: 网络错误`);
+        }
+    }
+
+    // 产品资料表单（项目分类/项目类型等）走整表提交，不在 DIRTY_FIELDS 里，单独补一步
+    const profileForm = changedProfileForm(root);
+    if (profileForm) {
+        try {
+            const resp = await postJSON(`/products/${profileForm.dataset.pk}/update-profile/`,
+                                        new FormData(profileForm));
+            if (resp.ok) {
+                profileForm._baseline = serializeForm(profileForm);
+            } else {
+                let errMsg = `HTTP ${resp.status}`;
+                try { const data = await resp.json(); errMsg = data.error || errMsg; } catch (_) {}
+                console.error('产品资料保存失败:', errMsg);
+                failures.push(`产品资料: ${errMsg}`);
+            }
+        } catch (e) {
+            console.error('产品资料保存异常:', e);
+            failures.push('产品资料: 网络错误');
+        }
+    }
+    return failures;
+}
+
+// 片段重绘后，把已经不在页面上的元素从 dirty 收集器里摘掉，避免下次「保存并刷新」提交过期值
+function pruneDirty() {
+    DIRTY_FIELDS.forEach((_, el) => {
+        if (!el.isConnected) DIRTY_FIELDS.delete(el);
+    });
+}
+
 // 产品资料表单是**整表批量提交**（update-profile 接口一次读所有字段），不适合按字段
 // 登记进 DIRTY_FIELDS，改为加载时快照一份内容、保存时比对来判断有没有改过。
 function serializeForm(form) {
@@ -436,6 +507,32 @@ async function publishProduct(productId) {
     }
 }
 
+async function pauseProduct(productId) {
+    if (!confirm('确认暂停该项目？暂停期间不再发送任何超期/临近通知，项目数据保持不变。')) return;
+    disableButtons();
+    const resp = await postJSON(`/products/${productId}/pause/`);
+    if (resp.ok) {
+        location.reload();
+    } else {
+        enableButtons();
+        const data = await resp.json();
+        showToast('操作失败: ' + (data.error || '未知错误'), 'error');
+    }
+}
+
+async function resumeProduct(productId) {
+    if (!confirm('确认恢复该项目？恢复后会重新开始发送相关通知。')) return;
+    disableButtons();
+    const resp = await postJSON(`/products/${productId}/resume/`);
+    if (resp.ok) {
+        location.reload();
+    } else {
+        enableButtons();
+        const data = await resp.json();
+        showToast('操作失败: ' + (data.error || '未知错误'), 'error');
+    }
+}
+
 async function cancelProduct(productId) {
     if (!confirm('确定取消该品？')) return;
     disableButtons();
@@ -446,40 +543,6 @@ async function cancelProduct(productId) {
         enableButtons();
         const data = await resp.json();
         showToast('操作失败: ' + (data.error || '未知错误'), 'error');
-    }
-}
-
-// 上架归档页彻底删除一个品，级联删除全部阶段/任务/附件/日志，不可撤销。
-// 原来是 btn.closest('tr, .kanban-row').remove()，但归档页是 .archive-card 卡片、
-// 不是表格行，选择器一个都命不中 —— 删完界面没反应。改成整页刷新，
-// 标题上的「已完成（N）」计数也顺带更新。
-async function deleteArchivedProduct(productId, productName, btn) {
-    if (!confirm(`确定彻底删除 "${productName}"？此操作不可撤销，将同时删除其全部阶段、任务、附件和日志。`)) return;
-    btn.disabled = true;
-    const resp = await postJSON(`/products/${productId}/delete/`);
-    if (resp.ok) {
-        location.reload();
-    } else {
-        btn.disabled = false;
-        const data = await resp.json();
-        showToast('删除失败: ' + (data.error || '未知错误'), 'error');
-    }
-}
-
-// 详情页 / 信息弹窗里彻底删除一个品。
-// 进行中的品会被后端拒掉（400「进行中的品不能删除，请先取消」），这里把后端那句话
-// 原样弹出来 —— 规则只写在后端一处，前端不再抄一遍状态判断，免得两边说法不一致。
-async function deleteProduct(productId, productName) {
-    if (!confirm(`确定彻底删除 "${productName}"？此操作不可撤销，将同时删除其全部阶段、任务、附件和日志。`)) return;
-    disableButtons();
-    const resp = await postJSON(`/products/${productId}/delete/`);
-    if (resp.ok) {
-        // 详情页和看板弹窗都回看板：弹窗就挂在看板上，整页刷新等于顺带关掉它
-        window.location.href = '/';
-    } else {
-        enableButtons();
-        const data = await resp.json();
-        showToast('删除失败: ' + (data.error || '未知错误'), 'error');
     }
 }
 
@@ -654,58 +717,8 @@ async function saveAndReload(btn) {
     if (active && typeof active.blur === 'function') active.blur();
     await new Promise(r => setTimeout(r, 100));
 
-    // 串行提交所有 dirty 字段：同实体字段有前后依赖（如 started_at vs expected_end_date），
-    // 并发会因层级校验用旧值而失败，串行保证每次校验用的都是最新 DB 状态。
-    // 优先提交 expected_end_date，再提交 started_at，避免"扩大时间范围时开始时间被旧结束时间卡住"
-    const entries = Array.from(DIRTY_FIELDS.entries())
-        .filter(([, info]) => info.url)
-        .sort(([, a], [, b]) => {
-            const order = {expected_end_date: 0, started_at: 1};
-            return (order[a.field] ?? 2) - (order[b.field] ?? 2);
-        });
-    const failures = [];
-    for (const [el, info] of entries) {
-        const fd = new FormData();
-        if (info.field === 'notes') {
-            // checklist_item_save_notes 接口用专属参数名 notes，不是通用的 field/value
-            fd.append('notes', info.value);
-        } else {
-            fd.append('field', info.field);
-            fd.append('value', info.value);
-        }
-        try {
-            const resp = await postJSON(info.url, fd);
-            if (!resp.ok) {
-                let errMsg = `HTTP ${resp.status}`;
-                try { const data = await resp.json(); errMsg = data.error || errMsg; } catch (_) {}
-                console.error('字段保存失败:', info, errMsg);
-                failures.push(`${info.field}: ${errMsg}`);
-            }
-        } catch (e) {
-            console.error('字段保存异常:', info, e);
-            failures.push(`${info.field}: 网络错误`);
-        }
-    }
-
-    // 产品资料表单（项目分类/项目类型等）走整表提交，不在 DIRTY_FIELDS 里，单独补一步
-    const profileForm = changedProfileForm(openModal);
-    if (profileForm) {
-        try {
-            const resp = await postJSON(`/products/${profileForm.dataset.pk}/update-profile/`,
-                                        new FormData(profileForm));
-            if (resp.ok) {
-                profileForm._baseline = serializeForm(profileForm);
-            } else {
-                let errMsg = `HTTP ${resp.status}`;
-                try { const data = await resp.json(); errMsg = data.error || errMsg; } catch (_) {}
-                console.error('产品资料保存失败:', errMsg);
-                failures.push(`产品资料: ${errMsg}`);
-            }
-        } catch (e) {
-            console.error('产品资料保存异常:', e);
-            failures.push('产品资料: 网络错误');
-        }
-    }
+    // 字段提交细节见 flushDirtyFields()：串行提交、时间字段按依赖排序、产品资料单独整表提交
+    const failures = await flushDirtyFields(openModal || document);
 
     if (failures.length > 0) {
         showToast(`保存失败: ${failures[0]}`, 'error');
@@ -751,21 +764,35 @@ async function saveProductProfile(event, form) {
 async function refreshStageModal() {
     if (!isStageModalOpen()) return;
     const content = document.getElementById('stage-modal-content');
+    // 重绘会丢掉还没保存的改动（添加任务时最常见）：先落库，保存失败就不刷新，
+    // 免得用户刚填的时间/执行人被旧数据盖掉
+    const failures = await flushDirtyFields(content);
+    if (failures.length > 0) {
+        showToast(`还有改动没保存：${failures[0]}，已取消刷新`, 'error');
+        return;
+    }
     const resp = await fetch(`/products/stages/${currentStageModalId}/detail-modal/`);
     if (resp.ok) {
         content.innerHTML = await resp.text();
         bindFieldHandlers(content);
+        pruneDirty();
     }
 }
 
 async function refreshProductModal() {
     if (!isProductModalOpen() || !currentProductModalUrl) return;
     const content = document.getElementById('product-modal-content');
+    const failures = await flushDirtyFields(content);
+    if (failures.length > 0) {
+        showToast(`还有改动没保存：${failures[0]}，已取消刷新`, 'error');
+        return;
+    }
     const resp = await fetch(currentProductModalUrl);
     if (resp.ok) {
         content.innerHTML = await resp.text();
         bindFieldHandlers(content);
         applyEditPermissionToFooter(content, '#product-modal-overlay .modal-footer');
+        pruneDirty();
     }
 }
 

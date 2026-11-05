@@ -670,3 +670,75 @@ class StageOwnerOverdueAggregationTest(TestCase):
         content = calls[0][0][1]
         self.assertIn('你负责的 1 个品存在超期阶段', content)
         self.assertNotIn('你负责的 2 个阶段存在超期任务', content)
+
+
+class PausedProductNotificationTest(TestCase):
+    """项目暂停后不再发任何通知：任务提醒、阶段聚合、品聚合、状态变更通知全部跳过。"""
+
+    def setUp(self):
+        self.dept = Department.objects.create(name='暂停通知部')
+        self.stage_owner = User.objects.create_user(
+            username='paused-stage-owner', password='pass', first_name='阶段负责人',
+        )
+        self.stage_owner.profile.department = self.dept
+        self.stage_owner.profile.wechat_userid = 'wx_stage_owner'
+        self.stage_owner.profile.save()
+
+        self.owner = User.objects.create_user(
+            username='paused-product-owner', password='pass', first_name='品负责人',
+        )
+        self.owner.profile.wechat_userid = 'wx_product_owner'
+        self.owner.profile.save()
+
+        self.admin = User.objects.create_user(
+            username='paused-admin', password='pass', first_name='管理员',
+        )
+        self.admin.profile.role = 'admin'
+        self.admin.profile.wechat_userid = 'wx_admin'
+        self.admin.profile.save()
+
+        self.product = Product.objects.create(
+            name='暂停通知品', creator=self.admin, assignee=self.owner,
+            status='paused',
+        )
+        self.stage = ProductStage.objects.create(
+            product=self.product, name='阶段1', order=1, department=self.dept,
+            status='in_progress', assignee=self.stage_owner,
+            started_at=timezone.now() - timedelta(days=10),
+        )
+        self.task = Task.objects.create(
+            product_stage=self.stage, name='任务A', order=1, status='in_progress',
+            assignee=self.stage_owner,
+            started_at=timezone.now() - timedelta(days=5),
+            expected_end_date=date.today() - timedelta(days=1),
+        )
+
+    @patch('reminders.wechat.send_wechat_message')
+    def test_scan_sends_nothing_for_paused_product(self, mock_send):
+        mock_send.return_value = True
+
+        scan_and_remind()
+
+        mock_send.assert_not_called()
+        self.assertFalse(ReminderLog.objects.exists())
+        self.assertFalse(UpwardNotifyLog.objects.exists())
+
+    @patch('reminders.wechat.send_wechat_message')
+    def test_notify_upward_skips_paused_product(self, mock_send):
+        mock_send.return_value = True
+
+        notify_upward(self.task, 'overdue')
+        notify_upward(self.stage, 'completed')
+        notify_upward(self.product, 'completed')
+
+        mock_send.assert_not_called()
+
+    @patch('reminders.wechat.send_wechat_message')
+    def test_scan_sends_again_after_resume(self, mock_send):
+        mock_send.return_value = True
+        self.product.resume()
+
+        scan_and_remind()
+
+        mock_send.assert_called()
+        self.assertTrue(ReminderLog.objects.filter(task=self.task).exists())

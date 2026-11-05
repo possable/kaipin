@@ -116,7 +116,9 @@ def scan_and_remind():
     # 同样是先收集再按负责人聚合发送。品总负责人往往同时管好几个品、
     # 每个品又可能有好几个阶段超期，逐条发就是一天七八条几乎一样的消息。
     newly_overdue_stages = []
-    for stage in ProductStage.objects.exclude(status='completed').select_related(
+    for stage in ProductStage.objects.exclude(
+        status='completed'
+    ).exclude(product__status='paused').select_related(
         'product', 'assignee'
     ):
         has_overdue_task = stage.tasks.filter(status='overdue').exists()
@@ -157,7 +159,7 @@ def scan_and_remind():
     # UpwardNotifyLog 仍然**逐品**写：它是按 (label, object_id, event_type, date) 去重的，
     # 逐品写才能保证「今天已经通知过的品」明天不会再被算进来。
     newly_overdue = []
-    for product in Product.objects.exclude(status__in=['completed', 'cancelled']):
+    for product in Product.objects.exclude(status__in=['completed', 'cancelled', 'paused']):
         has_overdue_stage = product.stages.exclude(status='completed').filter(
             tasks__status='overdue'
         ).exists()

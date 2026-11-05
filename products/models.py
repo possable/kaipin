@@ -74,6 +74,7 @@ class Product(models.Model):
     STATUS_CHOICES = [
         ('draft', '草稿'),
         ('active', '进行中'),
+        ('paused', '暂停'),
         ('completed', '已完成'),
         ('cancelled', '已取消'),
     ]
@@ -191,6 +192,26 @@ class Product(models.Model):
         if not self.started_at:
             self.started_at = timezone.now()
         self.save()
+
+    def pause(self):
+        """暂停项目：状态改为 paused，阶段/任务原样保留。
+
+        暂停期间所有自动通知都会跳过（定时扫描只扫 status='active'，
+        notify_upward 也会拦下暂停的品），恢复后照常继续。
+        """
+        if self.status != 'active':
+            return False
+        self.status = 'paused'
+        self.save(update_fields=['status'])
+        return True
+
+    def resume(self):
+        """恢复被暂停的项目"""
+        if self.status != 'paused':
+            return False
+        self.status = 'active'
+        self.save(update_fields=['status'])
+        return True
 
     def can_be_managed_by(self, user):
         """是否可编辑该品的负责人/时间等字段（管理员或品负责人）"""

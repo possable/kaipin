@@ -8,21 +8,25 @@
 </div>
 {% endif %}
 {% comment %}
-操作按钮。删除**不能**和取消共用同一个 status 判断：取消只对进行中的品可用，
-两者绑在一起的话，取消成功后按钮会一起消失，就再也删不掉了。
-进行中的品点删除会被后端拒掉并提示先取消（products/views.py:1147），这正是要的行为。
+操作按钮。项目不再提供彻底删除入口：取消该品是唯一的「关掉」方式，
+历史记录（阶段/任务/附件/日志）一并保留。
 {% endcomment %}
 {% if can_manage %}
 <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px;">
     {% if product.status == 'active' %}
+    <button type="button" class="btn btn-outline btn-sm" onclick="pauseProduct({{ product.pk }})">
+        <i class="bi bi-pause-circle"></i> 暂停项目
+    </button>
+    {% elif product.status == 'paused' %}
+    <button type="button" class="btn btn-primary btn-sm" onclick="resumeProduct({{ product.pk }})">
+        <i class="bi bi-play-circle"></i> 恢复项目
+    </button>
+    {% endif %}
+    {% if product.status == 'active' or product.status == 'paused' %}
     <button type="button" class="btn btn-danger btn-sm" onclick="cancelProduct({{ product.pk }})">
         <i class="bi bi-x-circle"></i> 取消该品
     </button>
     {% endif %}
-    <button type="button" class="btn btn-danger-solid btn-sm"
-            onclick="deleteProduct({{ product.pk }}, '{{ product.name|escapejs }}')">
-        <i class="bi bi-trash"></i> 删除该品
-    </button>
 </div>
 {% endif %}
 <div class="page-card" style="max-width:100%;margin-bottom:24px;padding:18px 24px;">
