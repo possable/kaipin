@@ -285,6 +285,9 @@ class StageOverdueAggregationTest(TestCase):
             self.assertIn(f'阶段聚合品{p_idx}', content)
             # 同一个品下的两个阶段要合并到同一行
             self.assertIn(f'阶段{p_idx}-1、阶段{p_idx}-2', content)
+            # 精准到超期任务名，不能只给数量
+            self.assertIn(f'「任务{p_idx}-1」', content)
+            self.assertIn(f'「任务{p_idx}-2」', content)
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
     def test_stage_log_written_per_stage(self, mock_send):
@@ -393,6 +396,12 @@ class ProductOverdueAggregationTest(TestCase):
             content,
         )
         self.assertIn('超期阶段：聚合阶段2（阶段负责人乙，1 个超期任务）', content)
+        # 具体到超期任务名
+        self.assertIn('超期任务：聚合阶段1：「聚合任务1」', content)
+        self.assertIn(
+            '聚合阶段1-2：「聚合任务1-2」、「聚合任务1-3」', content,
+        )
+        self.assertIn('聚合阶段2：「聚合任务2」', content)
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
     def test_unassigned_stage_shows_placeholder(self, mock_send):
@@ -610,6 +619,9 @@ class StageOwnerOverdueAggregationTest(TestCase):
         self.owner2.profile.wechat_userid = 'wx_stage_owner2'
         self.owner2.profile.save()
 
+        # 任务执行人不绑企微：本测试只关心阶段负责人汇总，不想混入任务级提醒
+        self.executor = User.objects.create(username='sowner_executor', first_name='执行人')
+
         self.product = Product.objects.create(name='阶段负责人测试品', creator=self.creator)
         # 甲负责两个阶段，乙负责一个阶段
         self.stage_a = self._make_stage('包装设计', 1, self.owner1, task_count=2)
@@ -624,6 +636,7 @@ class StageOwnerOverdueAggregationTest(TestCase):
         for i in range(task_count):
             Task.objects.create(
                 product_stage=stage, name=f'{name}任务{i + 1}', order=i + 1,
+                assignee=self.executor,
                 status='in_progress',
                 started_at=timezone.now() - timedelta(days=5),
                 expected_end_date=date.today() - timedelta(days=1),
@@ -641,10 +654,17 @@ class StageOwnerOverdueAggregationTest(TestCase):
         self.assertIn('你负责的 2 个阶段存在超期任务', content1)
         self.assertIn('「阶段负责人测试品」·「包装设计」（2 个超期任务）', content1)
         self.assertIn('「阶段负责人测试品」·「营销策划」（1 个超期任务）', content1)
+        # 具体到超期任务名
+        self.assertIn('「包装设计任务1」、「包装设计任务2」', content1)
+        self.assertIn('「营销策划任务1」', content1)
 
         calls2 = [c for c in mock_send.call_args_list if c[0][0] == 'wx_stage_owner2']
         self.assertEqual(len(calls2), 1)
-        self.assertIn('「阶段负责人测试品」·「产品生产」（3 个超期任务）', calls2[0][0][1])
+        content2 = calls2[0][0][1]
+        self.assertIn('「阶段负责人测试品」·「产品生产」（3 个超期任务）', content2)
+        self.assertIn(
+            '「产品生产任务1」、「产品生产任务2」、「产品生产任务3」', content2,
+        )
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
     def test_stage_owner_without_wechat_is_skipped(self, mock_send):
@@ -742,3 +762,315 @@ class PausedProductNotificationTest(TestCase):
 
         mock_send.assert_called()
         self.assertTrue(ReminderLog.objects.filter(task=self.task).exists())
+
+
+class DueBeforeReminderTest(TestCase):
+    """项目/阶段/子任务到期前三天（D-3 ~ D-1）提醒，按层级向上两级。"""
+
+    def setUp(self):
+        self.dept = Department.objects.create(name='到期提醒部')
+        self.creator = User.objects.create_user(username='due_creator', password='pass')
+
+        self.admin = User.objects.create_user(username='due_admin', password='pass')
+        self.admin.profile.role = 'admin'
+        self.admin.profile.wechat_userid = 'wx_due_admin'
+        self.admin.profile.save()
+
+        self.product_owner = User.objects.create_user(
+            username='due_po', password='pass', first_name='品负责人',
+        )
+        self.product_owner.profile.wechat_userid = 'wx_due_po'
+        self.product_owner.profile.save()
+
+        self.stage_owner = User.objects.create_user(
+            username='due_so', password='pass', first_name='阶段负责人',
+        )
+        self.stage_owner.profile.wechat_userid = 'wx_due_so'
+        self.stage_owner.profile.save()
+
+        self.task_assignee = User.objects.create_user(
+            username='due_ta', password='pass', first_name='任务执行人',
+        )
+        self.task_assignee.profile.wechat_userid = 'wx_due_ta'
+        self.task_assignee.profile.save()
+
+        self.today = timezone.localtime(timezone.now()).date()
+        self.product = Product.objects.create(
+            name='到期测试品', creator=self.creator, assignee=self.product_owner,
+            status='active', expected_end_date=self.today + timedelta(days=30),
+        )
+        self.stage = ProductStage.objects.create(
+            product=self.product, name='到期测试阶段', department=self.dept,
+            assignee=self.stage_owner, order=1, status='in_progress',
+            expected_end_date=self.today + timedelta(days=30),
+        )
+        self.task = Task.objects.create(
+            product_stage=self.stage, name='到期测试任务',
+            assignee=self.task_assignee, order=1, status='in_progress',
+            started_at=timezone.now() - timedelta(days=1),
+            expected_end_date=self.today + timedelta(days=30),
+            deadline=self.today + timedelta(days=30),
+        )
+
+    def _set_task_due_in(self, days, status='in_progress'):
+        self.task.expected_end_date = self.today + timedelta(days=days)
+        self.task.deadline = self.task.expected_end_date
+        self.task.status = status
+        self.task.save()
+
+    def _set_stage_due_in(self, days, status='in_progress'):
+        self.stage.expected_end_date = self.today + timedelta(days=days)
+        self.stage.status = status
+        self.stage.save()
+
+    def _set_product_due_in(self, days, status='active'):
+        self.product.expected_end_date = self.today + timedelta(days=days)
+        self.product.status = status
+        self.product.save()
+
+    @staticmethod
+    def _contents_to(mock_send, userid):
+        return [c[0][1] for c in mock_send.call_args_list if c[0][0] == userid]
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_task_due_in_three_days_notifies_executor_stage_and_product(self, mock_send):
+        self._set_task_due_in(3)
+
+        scan_and_remind()
+
+        for userid in ('wx_due_ta', 'wx_due_so', 'wx_due_po'):
+            contents = self._contents_to(mock_send, userid)
+            self.assertEqual(len(contents), 1, f'{userid} 应收到 1 条子任务到期提醒')
+            self.assertIn('到期测试任务', contents[0])
+            self.assertIn('距离截止还有 3 天', contents[0])
+        # 管理员不是子任务的向上两级，不抄送
+        self.assertEqual(self._contents_to(mock_send, 'wx_due_admin'), [])
+        self.assertTrue(
+            ReminderLog.objects.filter(task=self.task, reminder_type='upcoming').exists()
+        )
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_task_due_in_one_day_still_notifies(self, mock_send):
+        self._set_task_due_in(1)
+        scan_and_remind()
+        self.assertEqual(len(self._contents_to(mock_send, 'wx_due_ta')), 1)
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_task_due_in_four_days_sends_nothing(self, mock_send):
+        self._set_task_due_in(4)
+        scan_and_remind()
+        self.assertEqual(mock_send.call_args_list, [])
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_completed_task_gets_no_due_reminder(self, mock_send):
+        self._set_task_due_in(3, status='completed')
+        scan_and_remind()
+        self.assertEqual(mock_send.call_args_list, [])
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_stage_due_notifies_stage_product_and_admin(self, mock_send):
+        self._set_stage_due_in(2)
+
+        scan_and_remind()
+
+        for userid in ('wx_due_so', 'wx_due_po', 'wx_due_admin'):
+            contents = self._contents_to(mock_send, userid)
+            self.assertEqual(len(contents), 1, f'{userid} 应收到 1 条阶段到期提醒')
+            self.assertIn('到期测试阶段', contents[0])
+            self.assertIn('距离截止还有 2 天', contents[0])
+        self.assertEqual(self._contents_to(mock_send, 'wx_due_ta'), [])
+        self.assertTrue(UpwardNotifyLog.objects.filter(
+            content_type_label='stage', object_id=self.stage.pk,
+            event_type='upcoming', sent_date=self.today,
+        ).exists())
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_completed_stage_gets_no_due_reminder(self, mock_send):
+        self._set_stage_due_in(2, status='completed')
+        scan_and_remind()
+        self.assertEqual(mock_send.call_args_list, [])
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_product_due_notifies_owner_and_admin(self, mock_send):
+        self._set_product_due_in(1)
+
+        scan_and_remind()
+
+        for userid in ('wx_due_po', 'wx_due_admin'):
+            contents = self._contents_to(mock_send, userid)
+            self.assertEqual(len(contents), 1, f'{userid} 应收到 1 条项目到期提醒')
+            self.assertIn('到期测试品', contents[0])
+            self.assertIn('距离截止还有 1 天', contents[0])
+        self.assertEqual(self._contents_to(mock_send, 'wx_due_so'), [])
+        self.assertEqual(self._contents_to(mock_send, 'wx_due_ta'), [])
+        self.assertTrue(UpwardNotifyLog.objects.filter(
+            content_type_label='product', object_id=self.product.pk,
+            event_type='upcoming', sent_date=self.today,
+        ).exists())
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_paused_product_gets_no_due_reminder(self, mock_send):
+        self._set_task_due_in(2)
+        self._set_stage_due_in(2)
+        self._set_product_due_in(2, status='paused')
+
+        scan_and_remind()
+
+        mock_send.assert_not_called()
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_same_day_scan_twice_does_not_duplicate(self, mock_send):
+        self._set_task_due_in(2)
+        self._set_stage_due_in(2)
+        self._set_product_due_in(2)
+
+        scan_and_remind()
+        scan_and_remind()
+
+        self.assertEqual(len(self._contents_to(mock_send, 'wx_due_ta')), 1)
+        self.assertEqual(len(self._contents_to(mock_send, 'wx_due_so')), 2)  # 任务 + 阶段
+        self.assertEqual(len(self._contents_to(mock_send, 'wx_due_po')), 3)  # 任务 + 阶段 + 项目
+        self.assertEqual(len(self._contents_to(mock_send, 'wx_due_admin')), 2)  # 阶段 + 项目
+
+
+class IncompleteTaskReminderTest(TestCase):
+    """子任务缺执行人/开始时间/结束时间时，每天提醒阶段负责人，补齐即停。"""
+
+    def setUp(self):
+        self.dept = Department.objects.create(name='信息补全部')
+        self.creator = User.objects.create_user(username='inc_creator', password='pass')
+
+        self.product_owner = User.objects.create_user(
+            username='inc_po', password='pass', first_name='品负责人',
+        )
+        self.product_owner.profile.wechat_userid = 'wx_inc_po'
+        self.product_owner.profile.save()
+
+        self.stage_owner = User.objects.create_user(
+            username='inc_so', password='pass', first_name='阶段负责人',
+        )
+        self.stage_owner.profile.wechat_userid = 'wx_inc_so'
+        self.stage_owner.profile.save()
+
+        self.executor = User.objects.create_user(
+            username='inc_exec', password='pass', first_name='执行人',
+        )
+        self.executor.profile.wechat_userid = 'wx_inc_exec'
+        self.executor.profile.save()
+
+        self.today = timezone.localtime(timezone.now()).date()
+        self.product = Product.objects.create(
+            name='信息补全测试品', creator=self.creator, assignee=self.product_owner,
+            status='active', expected_end_date=self.today + timedelta(days=30),
+        )
+        self.stage = ProductStage.objects.create(
+            product=self.product, name='包装设计', department=self.dept,
+            assignee=self.stage_owner, order=1, status='in_progress',
+            started_at=timezone.now() - timedelta(days=1),
+            expected_end_date=self.today + timedelta(days=30),
+        )
+        self.task = Task.objects.create(
+            product_stage=self.stage, name='彩盒设计', assignee=self.executor,
+            order=1, status='in_progress',
+            started_at=timezone.now() - timedelta(days=1),
+            expected_end_date=self.today + timedelta(days=30),
+            deadline=self.today + timedelta(days=30),
+        )
+
+    @staticmethod
+    def _contents_to(mock_send, userid):
+        return [c[0][1] for c in mock_send.call_args_list if c[0][0] == userid]
+
+    def _clear(self, **fields):
+        for field, value in fields.items():
+            setattr(self.task, field, value)
+        self.task.save()
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_missing_all_required_fields_notifies_stage_owner(self, mock_send):
+        self._clear(assignee=None, started_at=None, expected_end_date=None)
+
+        scan_and_remind()
+
+        contents = self._contents_to(mock_send, 'wx_inc_so')
+        self.assertEqual(len(contents), 1)
+        self.assertIn('「信息补全测试品」·「包装设计」·「彩盒设计」', contents[0])
+        self.assertIn('缺执行人、开始时间、结束时间', contents[0])
+        # 只提醒阶段负责人，不打扰品负责人/执行人
+        self.assertEqual(self._contents_to(mock_send, 'wx_inc_po'), [])
+        self.assertEqual(self._contents_to(mock_send, 'wx_inc_exec'), [])
+        self.assertTrue(UpwardNotifyLog.objects.filter(
+            content_type_label='stage', object_id=self.stage.pk,
+            event_type='incomplete', sent_date=self.today,
+        ).exists())
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_only_missing_fields_are_listed(self, mock_send):
+        self._clear(expected_end_date=None)
+        # 执行人和开始时间都有，只缺结束时间
+        scan_and_remind()
+
+        content = self._contents_to(mock_send, 'wx_inc_so')[0]
+        self.assertIn('缺结束时间', content)
+        self.assertNotIn('执行人', content)
+        self.assertNotIn('开始时间', content)
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_all_required_fields_filled_sends_nothing(self, mock_send):
+        scan_and_remind()
+        mock_send.assert_not_called()
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_completed_task_sends_no_incomplete_reminder(self, mock_send):
+        self._clear(assignee=None, started_at=None, expected_end_date=None,
+                    status='completed')
+
+        scan_and_remind()
+
+        mock_send.assert_not_called()
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_pending_stage_sends_no_incomplete_reminder(self, mock_send):
+        self._clear(assignee=None, started_at=None, expected_end_date=None)
+        self.stage.status = 'pending'
+        self.stage.save()
+
+        scan_and_remind()
+
+        mock_send.assert_not_called()
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_paused_product_sends_no_incomplete_reminder(self, mock_send):
+        self._clear(assignee=None, started_at=None, expected_end_date=None)
+        self.product.status = 'paused'
+        self.product.save()
+
+        scan_and_remind()
+
+        mock_send.assert_not_called()
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_multiple_incomplete_tasks_are_aggregated(self, mock_send):
+        self._clear(assignee=None, started_at=None, expected_end_date=None)
+        Task.objects.create(
+            product_stage=self.stage, name='刀模确认', order=2,
+            status='in_progress',
+        )
+
+        scan_and_remind()
+
+        contents = self._contents_to(mock_send, 'wx_inc_so')
+        self.assertEqual(len(contents), 1)
+        self.assertIn('有 2 个子任务必填信息未填写', contents[0])
+        self.assertIn('「彩盒设计」', contents[0])
+        self.assertIn('「刀模确认」', contents[0])
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_stage_owner_without_wechat_is_skipped(self, mock_send):
+        self.stage_owner.profile.wechat_userid = ''
+        self.stage_owner.profile.save()
+        self._clear(assignee=None, started_at=None, expected_end_date=None)
+
+        scan_and_remind()
+
+        mock_send.assert_not_called()

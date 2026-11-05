@@ -134,19 +134,50 @@ def notify_upward(entity, event_type, actor=None):
 # ---------------------------------------------------------------------------
 
 
+def _overdue_task_names_by_stage(stage_ids):
+    """{阶段 id: [超期任务名, ...]}，按阶段顺序、任务顺序排列。
+
+    聚合消息除了「几个超期任务」，还要让收件人直接看到是哪几件事，
+    不然还得点进系统逐个阶段找。
+    """
+    from products.models import Task
+
+    stage_ids = list(stage_ids)
+    if not stage_ids:
+        return {}
+
+    rows = Task.objects.filter(
+        product_stage_id__in=stage_ids, status='overdue',
+    ).order_by('product_stage__order', 'order').values_list(
+        'product_stage_id', 'name',
+    )
+
+    result = {}
+    for stage_id, task_name in rows:
+        result.setdefault(stage_id, []).append(task_name)
+    return result
+
+
+def _task_names_text(task_names):
+    return '、'.join(f'「{name}」' for name in task_names)
+
+
 def _overdue_task_summary(product):
     """该品下「未完成阶段」里的超期情况。
 
     返回 (超期任务总数, [阶段明细, ...])，阶段明细按阶段顺序排列，每项是
-    {'name': 阶段名, 'owner': 负责人姓名（没设则为「未指定」）, 'count': 该阶段超期任务数}。
-    管理员聚合消息要能看出「哪些阶段超期了、该找谁」。
+    {'name': 阶段名, 'owner': 负责人姓名（没设则为「未指定」）, 'count': 该阶段超期任务数,
+     'tasks': [超期任务名, ...]}。
+    管理员聚合消息要能看出「哪些阶段超期了、该找谁、具体是哪几件事」。
     """
     from products.models import Task
 
     tasks = Task.objects.filter(
         product_stage__in=product.stages.exclude(status='completed'),
         status='overdue',
-    ).select_related('product_stage__assignee').order_by('product_stage__order')
+    ).select_related('product_stage__assignee').order_by(
+        'product_stage__order', 'order', 'id',
+    )
 
     stage_rows = []
     row_by_stage_id = {}
@@ -159,10 +190,12 @@ def _overdue_task_summary(product):
                 'name': stage.name,
                 'owner': (owner.first_name or owner.username) if owner else '未指定',
                 'count': 0,
+                'tasks': [],
             }
             row_by_stage_id[stage.id] = row
             stage_rows.append(row)
         row['count'] += 1
+        row['tasks'].append(task.name)
 
     return sum(row['count'] for row in stage_rows), stage_rows
 
@@ -197,14 +230,14 @@ def _group_by_recipient(items, recipient_of):
     return list(groups.values())
 
 
-def _send_aggregate(recipient, situation, target_type, target_id, target_name):
-    """给单个收件人发一条聚合消息，成功返回 True。
+def send_notice(recipient, situation, target_type, target_id, target_name,
+                event_label='超期'):
+    """给单个收件人发一条系统通知，成功返回 True。
 
     发不出去（没绑企微 / 企微报错 / 网络异常）都只影响这一个人，不向外抛。
+    是否绑定企微交给 send_message_to_user 按主身份判断，这里不再看 profile
+    字段 —— 多企业用户的主身份可能在 WeComIdentity 里。
     """
-    if not getattr(getattr(recipient, 'profile', None), 'wechat_userid', ''):
-        return False
-
     recipient_name = recipient.first_name or recipient.username
     content = (
         f'{recipient_name}你好，我是项目管理智能机器人。\n'
@@ -215,15 +248,18 @@ def _send_aggregate(recipient, situation, target_type, target_id, target_name):
     try:
         success = send_message_to_user(recipient, content)
     except Exception:
-        logger.exception('聚合通知发送异常: recipient=%s', recipient.username)
+        logger.exception('系统通知发送异常: recipient=%s', recipient.username)
         return False
     if not success:
         return False
 
     try:
-        log_action(recipient, '系统通知（超期）', target_type, target_id, target_name, situation)
+        log_action(
+            recipient, f'系统通知（{event_label}）',
+            target_type, target_id, target_name, situation,
+        )
     except Exception:
-        logger.exception('聚合通知写操作日志失败')
+        logger.exception('系统通知写操作日志失败')
     return True
 
 
@@ -259,6 +295,12 @@ def notify_products_overdue_upward(products):
                 for row in stage_rows
             )
             lines.append(f'   超期阶段：{stage_text}')
+            task_text = '；'.join(
+                f'{row["name"]}：{_task_names_text(row["tasks"])}'
+                for row in stage_rows if row['tasks']
+            )
+            if task_text:
+                lines.append(f'   超期任务：{task_text}')
 
     situation = (
         f'你有 {len(products)} 个品存在超期任务，请关注：\n'
@@ -268,7 +310,7 @@ def notify_products_overdue_upward(products):
 
     sent = 0
     for recipient in recipients:
-        if _send_aggregate(recipient, situation, 'product', products[0].pk, summary):
+        if send_notice(recipient, situation, 'product', products[0].pk, summary):
             sent += 1
     return sent
 
@@ -286,25 +328,37 @@ def notify_stages_overdue_upward(stages):
         return 0
 
     groups = _group_by_recipient(stages, lambda s: s.product.assignee)
+    tasks_by_stage = _overdue_task_names_by_stage(
+        stage.pk for _, own_stages in groups for stage in own_stages
+    )
 
     sent = 0
     for recipient, own_stages in groups:
         # 同一个品下的多个超期阶段合并成一行，负责人一眼能看出是哪个品出问题
         per_product = {}
         for stage in own_stages:
-            per_product.setdefault(stage.product.name, []).append(stage.name)
+            per_product.setdefault(stage.product.name, []).append(stage)
 
         lines = [
-            f'{idx}. 「{product_name}」：{"、".join(stage_names)}'
-            for idx, (product_name, stage_names) in enumerate(per_product.items(), 1)
+            f'{idx}. 「{product_name}」：'
+            + '、'.join(stage.name for stage in stage_list)
+            for idx, (product_name, stage_list) in enumerate(per_product.items(), 1)
         ]
         situation = (
             f'你负责的 {len(per_product)} 个品存在超期阶段，请关注：\n'
             + '\n'.join(lines)
         )
+        # 具体到超期任务名，收件人不用再点进去挨个阶段翻
+        task_lines = []
+        for stage in own_stages:
+            task_names = tasks_by_stage.get(stage.pk, [])
+            if task_names:
+                task_lines.append(f'{stage.name}：{_task_names_text(task_names)}')
+        if task_lines:
+            situation += '\n超期任务：' + '；'.join(task_lines)
         summary = f'{len(per_product)} 个品存在超期阶段'
 
-        if _send_aggregate(recipient, situation, 'stage', own_stages[0].pk, summary):
+        if send_notice(recipient, situation, 'stage', own_stages[0].pk, summary):
             sent += 1
     return sent
 
@@ -327,15 +381,20 @@ def notify_stage_owners_overdue_upward(stages):
         if stage.assignee_id and stage.assignee_id != stage.product.assignee_id
     ]
     groups = _group_by_recipient(eligible, lambda s: s.assignee)
+    tasks_by_stage = _overdue_task_names_by_stage(
+        stage.pk for _, own_stages in groups for stage in own_stages
+    )
 
     sent = 0
     for recipient, own_stages in groups:
         lines = []
         for idx, stage in enumerate(own_stages, 1):
             count = stage.tasks.filter(status='overdue').count()
+            task_names = tasks_by_stage.get(stage.pk, [])
+            task_suffix = f'：{_task_names_text(task_names)}' if task_names else ''
             lines.append(
                 f'{idx}. 「{stage.product.name}」·「{stage.name}」'
-                f'（{count} 个超期任务）'
+                f'（{count} 个超期任务）{task_suffix}'
             )
 
         situation = (
@@ -344,6 +403,163 @@ def notify_stage_owners_overdue_upward(stages):
         )
         summary = f'{len(own_stages)} 个阶段存在超期任务'
 
-        if _send_aggregate(recipient, situation, 'stage', own_stages[0].pk, summary):
+        if send_notice(recipient, situation, 'stage', own_stages[0].pk, summary):
+            sent += 1
+    return sent
+
+
+def _dedupe_recipients(candidates):
+    """[(user, role)] 按账号去重保序；同一人有多重身份时取先出现的角色。"""
+    seen = set()
+    result = []
+    for user, role in candidates:
+        if user is None or user.id in seen:
+            continue
+        seen.add(user.id)
+        result.append((user, role))
+    return result
+
+
+def notify_stages_due_upward(stages, today):
+    """阶段到期前提醒：阶段负责人 + 上一级品负责人 + 管理员（向上两级）。
+
+    只处理 expected_end_date 已落在 D-3 ~ D-1 的未完成阶段；
+    已完成阶段在扫描阶段就被排除了，不会继续提醒。
+    返回成功发送的消息条数。
+    """
+    stages = list(stages)
+    if not stages:
+        return 0
+
+    try:
+        admins = _admin_recipients()
+    except Exception:
+        logger.exception('notify_stages_due_upward 解析管理员失败')
+        admins = []
+
+    sent = 0
+    for stage in stages:
+        if not stage.expected_end_date:
+            continue
+        days_left = (stage.expected_end_date - today).days
+        end_date = stage.expected_end_date.strftime('%Y-%m-%d')
+        recipients = _dedupe_recipients(
+            [(stage.assignee, 'stage'), (stage.product.assignee, 'product')]
+            + [(admin, 'admin') for admin in admins]
+        )
+
+        for recipient, role in recipients:
+            if role == 'stage':
+                situation = (
+                    f'你负责的「{stage.product.name}」项目「{stage.name}」阶段'
+                    f'预计 {end_date} 结束，距离截止还有 {days_left} 天，请及时推进。'
+                )
+            elif role == 'product':
+                situation = (
+                    f'你负责的「{stage.product.name}」项目，「{stage.name}」阶段'
+                    f'预计 {end_date} 结束，距离截止还有 {days_left} 天，请关注。'
+                )
+            else:
+                situation = (
+                    f'「{stage.product.name}」项目的「{stage.name}」阶段'
+                    f'预计 {end_date} 结束，距离截止还有 {days_left} 天，请关注。'
+                )
+            if send_notice(recipient, situation, 'stage', stage.pk, stage.name, '临近'):
+                sent += 1
+    return sent
+
+
+def notify_products_due_upward(products, today):
+    """项目到期前提醒：品负责人 + 管理员（再往上一级）。
+
+    只处理 expected_end_date 已落在 D-3 ~ D-1 的进行中项目。
+    返回成功发送的消息条数。
+    """
+    products = list(products)
+    if not products:
+        return 0
+
+    try:
+        admins = _admin_recipients()
+    except Exception:
+        logger.exception('notify_products_due_upward 解析管理员失败')
+        admins = []
+
+    sent = 0
+    for product in products:
+        if not product.expected_end_date:
+            continue
+        days_left = (product.expected_end_date - today).days
+        end_date = product.expected_end_date.strftime('%Y-%m-%d')
+        recipients = _dedupe_recipients(
+            [(product.assignee, 'product')]
+            + [(admin, 'admin') for admin in admins]
+        )
+        owner_name = (
+            (product.assignee.first_name or product.assignee.username)
+            if product.assignee else '未指定'
+        )
+
+        for recipient, role in recipients:
+            if role == 'product':
+                situation = (
+                    f'你负责的项目「{product.name}」预计 {end_date} 结束，'
+                    f'距离截止还有 {days_left} 天，请及时安排收尾。'
+                )
+            else:
+                situation = (
+                    f'项目「{product.name}」（负责人：{owner_name}）预计 {end_date} 结束，'
+                    f'距离截止还有 {days_left} 天，请关注。'
+                )
+            if send_notice(recipient, situation, 'product', product.pk, product.name, '临近'):
+                sent += 1
+    return sent
+
+
+def notify_incomplete_tasks_upward(stage_tasks):
+    """子任务必填信息缺失：每天提醒阶段负责人，直到执行人/开始/结束时间补齐。
+
+    stage_tasks: [(stage, [task, ...]), ...]，只包含当天还没提醒过的阶段。
+    同一阶段负责人负责多个阶段时聚合成一条，避免一天收好几条。
+    返回成功发送的收件人数。
+    """
+    groups = {}
+    for stage, tasks in stage_tasks:
+        owner = stage.assignee
+        if owner is None:
+            continue
+        groups.setdefault(owner.id, (owner, []))[1].append((stage, tasks))
+
+    sent = 0
+    for owner, items in groups.values():
+        lines = []
+        for stage, tasks in items:
+            for task in tasks:
+                missing = []
+                if not task.assignee_id:
+                    missing.append('执行人')
+                if not task.started_at:
+                    missing.append('开始时间')
+                if not task.expected_end_date:
+                    missing.append('结束时间')
+                if not missing:
+                    continue
+                lines.append(
+                    f'{len(lines) + 1}. 「{stage.product.name}」·「{stage.name}」'
+                    f'·「{task.name}」：缺{"、".join(missing)}'
+                )
+
+        if not lines:
+            continue
+
+        situation = (
+            f'你负责的阶段有 {len(lines)} 个子任务必填信息未填写，请补全：\n'
+            + '\n'.join(lines)
+        )
+        first_stage = items[0][0]
+        if send_notice(
+            owner, situation, 'stage', first_stage.pk,
+            f'{first_stage.product.name} · {first_stage.name}', '信息待补全',
+        ):
             sent += 1
     return sent
