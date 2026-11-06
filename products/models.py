@@ -1,3 +1,6 @@
+import logging
+from datetime import timedelta
+
 from django.db import models
 from django.db.models import Q
 from django.contrib.auth.models import User
@@ -5,15 +8,20 @@ from django.utils import timezone
 from accounts.models import Department
 from templates_app.models import StageTemplate
 
+logger = logging.getLogger(__name__)
+
 
 def compute_task_status(task, today=None):
     """任务有效状态的唯一判定口径，供 Task.update_status() 和看板展示逻辑共用。
 
-    规则：已完成保持完成；开始时间或预计结束时间任一缺失→待开始；
-    今天早于开始时间→待开始；今天晚于预计结束→已逾期；否则→进行中。
+    规则：已完成保持完成；前置任务未完成→待开始；开始时间或预计结束时间
+    任一缺失→待开始；今天早于开始时间→待开始；今天晚于预计结束→已逾期；
+    否则→进行中。
     """
     if task.status == 'completed':
         return 'completed'
+    if task.is_blocked:
+        return 'pending'
     if today is None:
         today = timezone.now().date()
     started = task.started_at.date() if task.started_at else None
@@ -149,6 +157,9 @@ class Product(models.Model):
     def create_stages_from_templates(self):
         """从当前 StageTemplate 快照生成 ProductStage 和 Task。非草稿时自动激活第一阶段。"""
         templates = StageTemplate.objects.all()
+        # 前置任务可以跨阶段，先把所有 Task 建出来，再按模板里的依赖关系回填
+        template_task_map = {}
+        created_tasks = []
         for i, tmpl in enumerate(templates):
             ps = ProductStage.objects.create(
                 product=self,
@@ -168,12 +179,24 @@ class Product(models.Model):
                     status='pending',
                     is_milestone=t_tmpl.is_milestone,
                 )
+                template_task_map[t_tmpl.pk] = task
+                created_tasks.append((task, t_tmpl))
                 for k, c_tmpl in enumerate(t_tmpl.checklist_item_templates.all()):
                     TaskChecklistItem.objects.create(
                         task=task,
                         name=c_tmpl.name,
                         order=k + 1,
                     )
+
+        for task, t_tmpl in created_tasks:
+            if not t_tmpl.depends_on_id:
+                continue
+            predecessor = template_task_map.get(t_tmpl.depends_on_id)
+            if predecessor is None or predecessor.pk == task.pk:
+                continue
+            task.depends_on = predecessor
+            task.save(update_fields=['depends_on'])
+
         if self.status != 'draft':
             self.current_stage_order = 1
             self.save(update_fields=['current_stage_order'])
@@ -428,6 +451,10 @@ class Task(models.Model):
     order = models.PositiveIntegerField(default=0, verbose_name='排序')
     completed_at = models.DateTimeField(null=True, blank=True, verbose_name='完成时间')
     is_milestone = models.BooleanField(default=False, verbose_name='是否里程碑')
+    depends_on = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='dependents', verbose_name='前置任务',
+    )
 
     class Meta:
         verbose_name = '子任务'
@@ -436,6 +463,30 @@ class Task(models.Model):
 
     def __str__(self):
         return self.name
+
+    @property
+    def is_blocked(self):
+        """前置任务还没完成时，本任务不能开始（也就不能设开始时间）。"""
+        if not self.depends_on_id:
+            return False
+        return self.depends_on is None or self.depends_on.status != 'completed'
+
+    @property
+    def blocking_predecessor_name(self):
+        if not self.is_blocked:
+            return ''
+        return self.depends_on.name if self.depends_on else '前置任务'
+
+    def creates_dependency_cycle(self, predecessor):
+        """把 predecessor 设为本任务的前置任务，是否会形成环。"""
+        seen = set()
+        node = predecessor
+        while node is not None:
+            if node.pk == self.pk or node.pk in seen:
+                return True
+            seen.add(node.pk)
+            node = node.depends_on
+        return False
 
     def mark_completed(self):
         self.status = 'completed'
@@ -446,6 +497,72 @@ class Task(models.Model):
 
         from reminders.upward_notify import notify_upward
         notify_upward(self, 'completed', actor=self.assignee)
+
+        # 前置任务完成 → 依赖它的任务立即解锁：自动补开始/结束时间并通知三方。
+        # 通知/写日志失败不能影响「前置任务已完成」这条主流程。
+        try:
+            self._activate_dependents(now)
+        except Exception:
+            logger.exception(
+                '前置任务完成后自动激活后续任务失败: predecessor=%s', self.pk,
+            )
+
+    def _activate_dependents(self, completed_at):
+        dependents = list(
+            self.dependents.exclude(status='completed').select_related(
+                'assignee__profile',
+                'product_stage__assignee__profile',
+                'product_stage__product__assignee__profile',
+            )
+        )
+        if not dependents:
+            return
+
+        started_at = completed_at
+        start_date = timezone.localtime(started_at).date()
+        expected_end_date = start_date + timedelta(days=7)
+
+        for dependent in dependents:
+            # 前置任务完成后自动匹配开始时间，预计结束默认 7 天后；
+            # 阶段负责人之后仍可手工修改这两个时间。
+            try:
+                dependent.started_at = started_at
+                dependent.expected_end_date = expected_end_date
+                dependent.status = 'pending'
+                dependent.save(update_fields=[
+                    'started_at', 'expected_end_date', 'status',
+                ])
+                dependent.update_status()
+                dependent.sync_auto_todo()
+            except Exception:
+                logger.exception(
+                    '自动激活后续任务失败: task=%s predecessor=%s',
+                    dependent.pk, self.pk,
+                )
+                continue
+
+            try:
+                from reminders.upward_notify import notify_dependent_started
+                notify_dependent_started(dependent, self)
+            except Exception:
+                logger.exception(
+                    '前置任务完成通知失败: task=%s predecessor=%s',
+                    dependent.pk, self.pk,
+                )
+
+            try:
+                from activity_log.utils import log_action
+                log_action(
+                    None, '前置任务完成，任务自动开始', 'task', dependent.pk,
+                    f'{dependent.product_stage.product.name} / {dependent.name}',
+                    f'前置任务「{self.name}」已完成，'
+                    f'开始时间自动设为 {start_date:%Y-%m-%d}，'
+                    f'预计结束 {expected_end_date:%Y-%m-%d}',
+                )
+            except Exception:
+                logger.exception(
+                    '前置任务完成写操作日志失败: task=%s', dependent.pk,
+                )
 
     def mark_overdue(self):
         """由定时任务调用：将任务标记为延期"""

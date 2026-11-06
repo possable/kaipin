@@ -28,6 +28,24 @@
                    value="{{ task.order|default:'0' }}" placeholder="0">
         </div>
         <div class="form-group">
+            <label class="form-label">前置任务</label>
+            <select name="depends_on" class="form-input">
+                <option value="">无（默认不设置前置任务）</option>
+                {% for group in predecessor_groups %}
+                <optgroup label="{{ group.stage.name }}">
+                    {% for candidate in group.tasks %}
+                    <option value="{{ candidate.pk }}" {% if task.depends_on_id == candidate.pk %}selected{% endif %}>
+                        {{ candidate.name }}
+                    </option>
+                    {% endfor %}
+                </optgroup>
+                {% endfor %}
+            </select>
+            <p style="font-size:12px;color:var(--muted);margin-top:6px;">
+                可跨阶段选择；前置任务未完成时，新建项目中的该任务不会开始。
+            </p>
+        </div>
+        <div class="form-group">
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                 <input type="checkbox" name="is_milestone"
                        {% if task.is_milestone %}checked{% endif %}

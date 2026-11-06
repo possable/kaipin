@@ -56,6 +56,31 @@ class ProductModelTest(TestCase):
         self.assertEqual(ps.name, '阶段1')
         self.assertEqual(ps.tasks.count(), 2)
 
+    def test_create_product_snapshots_task_predecessors(self):
+        """流程模板里设置的前置任务会快照到新建项目的 Task 上；没设的保持为空。"""
+        task_a = self.st1.task_templates.get(name='任务A')
+        task_b = self.st1.task_templates.get(name='任务B')
+        task_c = self.st2.task_templates.get(name='任务C')
+        task_c.depends_on = task_a  # 跨阶段前置
+        task_c.save(update_fields=['depends_on'])
+
+        product = Product.objects.create(name='测试品', creator=self.user)
+        product.create_stages_from_templates()
+
+        snap_a = product.stages.get(order=1).tasks.get(name='任务A')
+        snap_b = product.stages.get(order=1).tasks.get(name='任务B')
+        snap_c = product.stages.get(order=2).tasks.get(name='任务C')
+
+        self.assertEqual(snap_c.depends_on_id, snap_a.pk)
+        self.assertIsNone(snap_b.depends_on_id)
+        self.assertTrue(snap_c.is_blocked)
+        self.assertFalse(snap_a.is_blocked)
+        # 模板快照后改模板不影响已建项目
+        task_c.depends_on = task_b
+        task_c.save(update_fields=['depends_on'])
+        snap_c.refresh_from_db()
+        self.assertEqual(snap_c.depends_on_id, snap_a.pk)
+
     def test_create_product_snapshots_checklist_items(self):
         """子任务模板下的最小事项模板也会被快照到新品的 Task 上"""
         task_a = self.st1.task_templates.get(name='任务A')
@@ -1012,3 +1037,189 @@ class ProductPauseResumeTest(TestCase):
         self.assertEqual(self.product.status, 'cancelled')
         # 取消时间写入 actual_end_date，项目归档页按它排序/筛选
         self.assertIsNotNone(self.product.actual_end_date)
+
+
+class TaskPredecessorTest(TestCase):
+    """前置任务：未完成时锁定开始，完成后自动排期并通知三方。"""
+
+    def setUp(self):
+        self.dept = Department.objects.create(name='前置任务部')
+        self.stage_owner = User.objects.create_user(
+            username='pred-stage', password='pass', first_name='阶段负责人',
+        )
+        self.stage_owner.profile.department = self.dept
+        self.stage_owner.profile.wechat_userid = 'wx_pred_stage'
+        self.stage_owner.profile.save()
+        self.product_owner = User.objects.create_user(
+            username='pred-product', password='pass', first_name='项目负责人',
+        )
+        self.product_owner.profile.department = self.dept
+        self.product_owner.profile.wechat_userid = 'wx_pred_product'
+        self.product_owner.profile.save()
+        self.executor = User.objects.create_user(
+            username='pred-executor', password='pass', first_name='执行人',
+        )
+        self.executor.profile.department = self.dept
+        self.executor.profile.wechat_userid = 'wx_pred_executor'
+        self.executor.profile.save()
+
+        self.product = Product.objects.create(
+            name='前置任务项目', creator=self.product_owner,
+            assignee=self.product_owner, status='active',
+        )
+        self.stage = ProductStage.objects.create(
+            product=self.product, name='设计阶段', order=1,
+            department=self.dept, assignee=self.stage_owner,
+            status='in_progress',
+        )
+        self.other_stage = ProductStage.objects.create(
+            product=self.product, name='包装阶段', order=2,
+            department=self.dept, assignee=self.stage_owner,
+            status='pending',
+        )
+        self.predecessor = Task.objects.create(
+            product_stage=self.stage, name='完成设计稿', order=1,
+            assignee=self.executor,
+        )
+        self.dependent = Task.objects.create(
+            product_stage=self.stage, name='开始打样', order=2,
+            assignee=self.executor,
+        )
+        self.foreign_task = Task.objects.create(
+            product_stage=self.other_stage, name='其他阶段任务', order=1,
+        )
+
+    def test_dependent_cannot_set_start_while_predecessor_incomplete(self):
+        self.client.login(username='pred-stage', password='pass')
+        response = self.client.post(
+            reverse('task_update_field', args=[self.dependent.pk]),
+            {'field': 'predecessor', 'value': self.predecessor.pk},
+        )
+        self.assertEqual(response.status_code, 200)
+
+        start = timezone.localdate().isoformat()
+        response = self.client.post(
+            reverse('task_update_field', args=[self.dependent.pk]),
+            {'field': 'started_at', 'value': start},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('未完成', response.json()['error'])
+
+        self.dependent.refresh_from_db()
+        self.assertIsNone(self.dependent.started_at)
+        self.assertEqual(self.dependent.status, 'pending')
+
+    def test_blocked_task_cannot_be_marked_completed(self):
+        self.dependent.depends_on = self.predecessor
+        self.dependent.save(update_fields=['depends_on'])
+
+        self.client.login(username='pred-executor', password='pass')
+        response = self.client.post(
+            reverse('task_complete', args=[self.dependent.pk]),
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.dependent.refresh_from_db()
+        self.assertEqual(self.dependent.status, 'pending')
+
+    def test_cycle_is_rejected(self):
+        self.dependent.depends_on = self.predecessor
+        self.dependent.save(update_fields=['depends_on'])
+
+        self.client.login(username='pred-stage', password='pass')
+        response = self.client.post(
+            reverse('task_update_field', args=[self.predecessor.pk]),
+            {'field': 'predecessor', 'value': self.dependent.pk},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('不能设为前置任务', response.json()['error'])
+        self.predecessor.refresh_from_db()
+        self.assertIsNone(self.predecessor.depends_on_id)
+
+    def test_predecessor_can_come_from_another_stage(self):
+        self.client.login(username='pred-stage', password='pass')
+        response = self.client.post(
+            reverse('task_update_field', args=[self.dependent.pk]),
+            {'field': 'predecessor', 'value': self.foreign_task.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.dependent.refresh_from_db()
+        self.assertEqual(self.dependent.depends_on_id, self.foreign_task.pk)
+        self.assertTrue(self.dependent.is_blocked)
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_cross_stage_predecessor_completion_starts_dependent(self, mock_send):
+        self.dependent.depends_on = self.foreign_task
+        self.dependent.save(update_fields=['depends_on'])
+
+        self.foreign_task.mark_completed()
+
+        self.dependent.refresh_from_db()
+        self.assertIsNotNone(self.dependent.started_at)
+        self.assertEqual(
+            self.dependent.expected_end_date,
+            timezone.localtime(self.dependent.started_at).date()
+            + timedelta(days=7),
+        )
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_completing_predecessor_starts_dependent_and_notifies(self, mock_send):
+        self.dependent.depends_on = self.predecessor
+        self.dependent.save(update_fields=['depends_on'])
+
+        self.predecessor.mark_completed()
+
+        self.dependent.refresh_from_db()
+        self.predecessor.refresh_from_db()
+        self.assertIsNotNone(self.dependent.started_at)
+        self.assertEqual(self.dependent.started_at, self.predecessor.actual_end_date)
+        expected = (
+            timezone.localtime(self.dependent.started_at).date()
+            + timedelta(days=7)
+        )
+        self.assertEqual(self.dependent.expected_end_date, expected)
+        self.assertEqual(self.dependent.status, 'in_progress')
+
+        called_userids = [call.args[0] for call in mock_send.call_args_list]
+        for userid in ('wx_pred_executor', 'wx_pred_stage', 'wx_pred_product'):
+            self.assertIn(userid, called_userids)
+        contents = [call.args[1] for call in mock_send.call_args_list]
+        self.assertTrue(any(
+            '前置任务「完成设计稿」已完成' in content
+            and '开始打样' in content
+            for content in contents
+        ))
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_completing_predecessor_without_roles_still_sets_dates(self, mock_send):
+        """没有执行人/负责人也要自动排期，只是没人可通知。"""
+        task = Task.objects.create(
+            product_stage=self.stage, name='无负责人任务', order=3,
+            depends_on=self.predecessor,
+        )
+
+        self.predecessor.mark_completed()
+
+        task.refresh_from_db()
+        self.assertIsNotNone(task.started_at)
+        self.assertIsNotNone(task.expected_end_date)
+
+    def test_stage_detail_renders_predecessor_column_and_lock(self):
+        self.dependent.depends_on = self.predecessor
+        self.dependent.save(update_fields=['depends_on'])
+
+        self.client.login(username='pred-stage', password='pass')
+        response = self.client.get(
+            reverse('stage_detail_modal', args=[self.stage.pk]),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        self.assertIn('data-field="predecessor"', body)
+        self.assertIn('待前置完成', body)
+        self.assertIn('完成设计稿', body)
+        # 跨阶段候选按阶段分组显示
+        self.assertIn('<optgroup label="包装阶段">', body)
+        self.assertIn('其他阶段任务', body)

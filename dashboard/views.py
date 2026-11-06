@@ -80,7 +80,7 @@ def _stage_kpi_counts(user, stage_names):
 
     today = date.today()
     products = _kanban_products_for(user).filter(status='active').prefetch_related(
-        'stages__tasks'
+        'stages__tasks__depends_on'
     )
     for product in products:
         hit_names = set()
@@ -120,7 +120,7 @@ def kanban(request):
         # 项目归档页，落回「全部」而不是给一张空表
         status_filter = 'all'
 
-    products = products.prefetch_related('stages__tasks')
+    products = products.prefetch_related('stages__tasks__depends_on')
 
     # 关键词模糊搜索：品名、产品名称、项目分类、上架平台
     if q:

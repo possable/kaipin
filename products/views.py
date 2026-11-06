@@ -597,6 +597,36 @@ def _annotate_stage_permissions(product, stages, user):
     is_admin = user.profile.is_admin
     is_product_owner = (product.assignee == user)
     is_draft = (product.status == 'draft')
+
+    # 前置任务可以跨阶段选择，所以候选范围是整个项目，而不只是当前渲染的阶段。
+    # 一次性查出来并按阶段分组，后面判断环时纯内存遍历，避免 N+1 查询。
+    all_product_tasks = list(
+        Task.objects.filter(product_stage__product=product)
+        .select_related('product_stage', 'depends_on')
+        .order_by('product_stage__order', 'order', 'id')
+    )
+    dependency_map = {t.pk: t.depends_on_id for t in all_product_tasks}
+    tasks_by_stage = {}
+    for candidate in all_product_tasks:
+        tasks_by_stage.setdefault(candidate.product_stage_id, []).append(candidate)
+    predecessor_groups = [
+        {
+            'stage': candidates[0].product_stage,
+            'tasks': candidates,
+        }
+        for candidates in tasks_by_stage.values()
+    ]
+
+    def _would_cycle(task, candidate):
+        seen = set()
+        node = candidate.pk
+        while node is not None:
+            if node == task.pk or node in seen:
+                return True
+            seen.add(node)
+            node = dependency_map.get(node)
+        return False
+
     for stage in stages:
         # 草稿状态：品负责人和管理员可以编辑所有阶段
         if is_draft and (is_admin or is_product_owner):
@@ -621,6 +651,20 @@ def _annotate_stage_permissions(product, stages, user):
                 is_admin or is_product_owner
                 or stage.assignee == user
             )
+            # 前置任务可以来自任意阶段；排除自身和会形成环的候选
+            task.predecessor_groups = [
+                {
+                    'stage': group['stage'],
+                    'tasks': [
+                        candidate for candidate in group['tasks']
+                        if candidate.pk != task.pk and not _would_cycle(task, candidate)
+                    ],
+                }
+                for group in predecessor_groups
+            ]
+            task.predecessor_groups = [
+                group for group in task.predecessor_groups if group['tasks']
+            ]
             items = list(task.checklist_items.all())
             task.checklist_total = len(items)
             task.checklist_done = sum(1 for i in items if i.is_done)
@@ -639,6 +683,7 @@ def product_detail(request, pk):
     stages = product.stages.all().prefetch_related(
         'tasks__attachments',
         'tasks__checklist_items__logs__user',
+        'tasks__depends_on__product_stage',
     )
 
     is_admin, can_manage = _annotate_stage_permissions(product, stages, request.user)
@@ -895,6 +940,7 @@ def stage_detail_modal(request, stage_id):
     stages = product.stages.filter(pk=stage.pk).prefetch_related(
         'tasks__attachments',
         'tasks__checklist_items__logs__user',
+        'tasks__depends_on__product_stage',
     )
 
     is_admin, can_manage = _annotate_stage_permissions(product, stages, request.user)
@@ -953,6 +999,10 @@ def task_complete(request, task_id):
                    f'{task.product_stage.product.name} / {task.name}',
                    f'任务状态: 已完成 → {task.get_status_display()}')
         return JsonResponse({'success': True, 'status': task.status, 'reverted': True})
+    if task.is_blocked:
+        return JsonResponse({
+            'error': f'前置任务「{task.blocking_predecessor_name}」未完成，任务尚不能开始',
+        }, status=400)
     old_status = task.get_status_display()
     task.mark_completed()
     task.sync_auto_todo()
@@ -1436,10 +1486,10 @@ def task_update_field(request, task_id):
     if not _check_task_permission(request.user, task):
         return JsonResponse({'error': '无权限操作此任务'}, status=403)
 
-    # 开始时间和预计结束时间只有管理员/品负责人/阶段负责人能改
+    # 时间字段和前置任务只有管理员/品负责人/阶段负责人能改
     time_fields = {'started_at', 'expected_end_date', 'deadline'}
     field = request.POST.get('field', '')
-    if field in time_fields:
+    if field in time_fields or field == 'predecessor':
         product = task.product_stage.product
         stage = task.product_stage
         can_manage_time = (
@@ -1458,6 +1508,7 @@ def task_update_field(request, task_id):
         'expected_end_date': '预计结束日期',
         'deadline': '截止日期',
         'assignee': '负责人',
+        'predecessor': '前置任务',
     }
 
     # 记录修改前的值
@@ -1467,6 +1518,10 @@ def task_update_field(request, task_id):
     if field == 'started_at':
         old_val = task.started_at.strftime('%Y-%m-%d') if task.started_at else '无'
         new_started = _parse_dt(value)
+        if new_started and task.is_blocked:
+            return JsonResponse({
+                'error': f'前置任务「{task.blocking_predecessor_name}」未完成，暂不能设置开始时间',
+            }, status=400)
         if new_started and task.expected_end_date and new_started.date() > task.expected_end_date:
             return JsonResponse({'error': '开始时间不能大于预计结束日期'}, status=400)
         # 校验：任务开始时间必须在阶段时间范围内
@@ -1502,6 +1557,35 @@ def task_update_field(request, task_id):
         else:
             task.assignee = None
         new_val = task.assignee.username if task.assignee else '无'
+    elif field == 'predecessor':
+        old_val = task.depends_on.name if task.depends_on_id else '无'
+        predecessor = None
+        if value:
+            try:
+                predecessor = Task.objects.select_related('depends_on').get(
+                    pk=int(value), product_stage__product=stage.product,
+                )
+            except (Task.DoesNotExist, ValueError):
+                return JsonResponse({
+                    'error': '前置任务不存在，或不属于当前项目',
+                }, status=400)
+            if predecessor.pk == task.pk:
+                return JsonResponse({'error': '前置任务不能是任务自身'}, status=400)
+            if task.creates_dependency_cycle(predecessor):
+                return JsonResponse({
+                    'error': f'「{predecessor.name}」已直接或间接依赖此任务，不能设为前置任务',
+                }, status=400)
+            if task.status == 'completed' and predecessor.status != 'completed':
+                return JsonResponse({
+                    'error': '已完成的任务不能设置未完成的前置任务',
+                }, status=400)
+
+        task.depends_on = predecessor
+        # 前置任务未完成时，任务不能开始：清掉已有的开始时间，状态回到待开始。
+        # 等前置任务完成时再自动补开始/结束时间。
+        if task.is_blocked:
+            task.started_at = None
+        new_val = predecessor.name if predecessor else '无'
     else:
         return JsonResponse({'error': f'不支持的字段: {field}'}, status=400)
 

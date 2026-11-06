@@ -70,6 +70,7 @@ def scan_and_remind():
         'product_stage__product__assignee',
         'product_stage__assignee',
         'assignee__profile',
+        'depends_on',
     )
 
     sent_count = 0
@@ -79,6 +80,10 @@ def scan_and_remind():
     for task in tasks:
         # 先根据时间自动更新状态
         task.update_status()
+
+        # 前置任务没完成的任务还不能开始，不发到期/超期提醒
+        if task.is_blocked:
+            continue
 
         # 确定用于提醒的截止日期（优先用预计结束日期）
         end_date = task.expected_end_date or task.deadline
@@ -165,12 +170,15 @@ def scan_and_remind():
         | Q(started_at__isnull=True)
         | Q(expected_end_date__isnull=True)
     ).select_related(
-        'product_stage__product', 'product_stage__assignee',
+        'product_stage__product', 'product_stage__assignee', 'depends_on',
     ).order_by('product_stage__order', 'order', 'id')
 
     stage_tasks = {}
     stage_map = {}
     for task in incomplete_tasks:
+        # 前置任务没完成时，开始时间本来就不该填，催阶段负责人没有意义
+        if task.is_blocked:
+            continue
         stage = task.product_stage
         stage_map[stage.pk] = stage
         stage_tasks.setdefault(stage.pk, []).append(task)

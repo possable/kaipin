@@ -10,6 +10,7 @@ import logging
 
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.utils import timezone
 
 from activity_log.utils import log_action
 from .wechat import send_message_to_user
@@ -120,6 +121,53 @@ def notify_upward(entity, event_type, actor=None):
             )
         except Exception:
             logger.exception('notify_upward 写操作日志失败')
+
+
+def notify_dependent_started(task, predecessor):
+    """前置任务完成后，通知依赖任务的执行人、阶段负责人和项目负责人。
+
+    三个角色按账号去重；没绑企微的人由 send_message_to_user 返回 False 跳过。
+    暂停的项目不发通知（与 notify_upward 保持一致），但任务时间仍由调用方自动填好。
+    """
+    stage = task.product_stage
+    product = stage.product
+    if product.status == 'paused':
+        return
+
+    recipients = []
+    seen = set()
+    for user in (task.assignee, stage.assignee, product.assignee):
+        if user is None or user.id in seen:
+            continue
+        seen.add(user.id)
+        recipients.append(user)
+    if not recipients:
+        return
+
+    start_text = (
+        timezone.localtime(task.started_at).strftime('%Y-%m-%d')
+        if task.started_at else '待填写'
+    )
+    end_text = (
+        task.expected_end_date.strftime('%Y-%m-%d')
+        if task.expected_end_date else '待填写'
+    )
+    assignee = task.assignee
+    assignee_text = (
+        (assignee.first_name or assignee.username) if assignee else '待指定'
+    )
+
+    situation = (
+        f'「{product.name}」·「{stage.name}」·「{task.name}」的前置任务'
+        f'「{predecessor.name}」已完成。\n'
+        f'任务已自动开始：开始时间 {start_text}，预计结束 {end_text}。\n'
+        f'执行人：{assignee_text}。'
+    )
+
+    for recipient in recipients:
+        send_notice(
+            recipient, situation, 'task', task.pk, task.name, '前置完成',
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -550,6 +598,9 @@ def notify_incomplete_tasks_upward(stage_tasks):
         lines = []
         for stage, tasks in items:
             for task in tasks:
+                # 前置任务未完成时，开始时间本来就不该填，不算信息缺失
+                if task.is_blocked:
+                    continue
                 missing = []
                 if not task.assignee_id:
                     missing.append('执行人')

@@ -38,6 +38,7 @@
         <thead>
             <tr>
                 <th>任务</th>
+                <th style="width:120px;">前置任务</th>
                 <th style="width:80px;">执行人</th>
                 <th style="width:115px;white-space:nowrap;">开始</th>
                 <th style="width:115px;white-space:nowrap;">预计结束</th>
@@ -64,6 +65,31 @@
                     {% endif %}
                 </td>
                 <td>
+                    {% if task.can_manage_time %}
+                    <select class="form-input task-field" data-field="predecessor" data-task-id="{{ task.pk }}"
+                            style="font-size:11px;padding:3px 4px;width:110px;"
+                            title="前置任务未完成时，本任务不能开始">
+                        <option value="">无</option>
+                        {% for group in task.predecessor_groups %}
+                        <optgroup label="{{ group.stage.name }}">
+                            {% for candidate in group.tasks %}
+                            <option value="{{ candidate.pk }}" {% if task.depends_on_id == candidate.pk %}selected{% endif %}>
+                                {{ candidate.name }}（{% if candidate.status == 'completed' %}已完成{% else %}未完成{% endif %}）
+                            </option>
+                            {% endfor %}
+                        </optgroup>
+                        {% endfor %}
+                    </select>
+                    {% elif task.depends_on %}
+                    <span style="font-size:12px;" title="前置任务{% if task.is_blocked %}未完成{% else %}已完成{% endif %}">
+                        {% if task.depends_on.product_stage_id != stage.pk %}{{ task.depends_on.product_stage.name }} · {% endif %}{{ task.depends_on.name }}
+                        {% if task.is_blocked %}<i class="bi bi-lock-fill" style="color:var(--color-gray-500);"></i>{% endif %}
+                    </span>
+                    {% else %}
+                    <span style="font-size:12px;color:var(--muted);">--</span>
+                    {% endif %}
+                </td>
+                <td>
                     <div style="display:flex;gap:2px;align-items:center;">
                     {% if task.can_edit %}
                     <input type="text" class="form-input task-field user-search" list="{{ datalist_id|default:'users-datalist' }}" data-field="assignee" data-task-id="{{ task.pk }}"
@@ -83,7 +109,11 @@
                     </div>
                 </td>
                 <td>
-                    {% if task.can_manage_time %}
+                    {% if task.is_blocked %}
+                        <span style="font-size:11px;color:var(--color-gray-500);" title="前置任务「{{ task.blocking_predecessor_name }}」未完成，暂不能设置开始时间">
+                            <i class="bi bi-lock-fill"></i> 待前置完成
+                        </span>
+                    {% elif task.can_manage_time %}
                     <input type="date" class="form-input task-field" data-field="started_at" data-task-id="{{ task.pk }}"
                            value="{{ task.started_at|date:'Y-m-d' }}" style="font-size:11px;padding:3px 4px;width:110px;">
                     {% else %}

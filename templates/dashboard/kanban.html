@@ -308,7 +308,7 @@
 const ALL_USERS = [{% for u in all_users %}{id:{{u.id}},name:"{{u.first_name|default:u.username|escapejs}}"}{% if not forloop.last %},{% endif %}{% endfor %}];
 
 </script>
-<script src="{% static 'js/app.js' %}?v=20261103-nodelete"></script>
+<script src="{% static 'js/app.js' %}?v=20261106-predecessor"></script>
 <script>
 const assigneeInput = document.getElementById('assignee-input');
 if (assigneeInput) {

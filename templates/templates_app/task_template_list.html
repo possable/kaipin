@@ -15,7 +15,7 @@
 
 <table class="data-table">
     <thead>
-        <tr><th style="width:60px;">顺序</th><th>任务名称</th><th style="width:220px;">操作</th></tr>
+        <tr><th style="width:60px;">顺序</th><th>任务名称</th><th>前置任务</th><th style="width:220px;">操作</th></tr>
     </thead>
     <tbody>
         {% for task in tasks %}
@@ -24,6 +24,13 @@
             <td>
                 {% if task.is_milestone %}<i class="bi bi-flag-fill" style="color:#ffd700;" title="里程碑"></i> {% endif %}
                 <strong>{{ task.name }}</strong>
+            </td>
+            <td>
+                {% if task.depends_on %}
+                    {% if task.depends_on.stage_template_id != stage.pk %}{{ task.depends_on.stage_template.name }} · {% endif %}{{ task.depends_on.name }}
+                {% else %}
+                    <span style="color:var(--muted);">无</span>
+                {% endif %}
             </td>
             <td>
                 <div style="display:flex;gap:4px;">
@@ -41,7 +48,7 @@
         </tr>
         {% empty %}
         <tr>
-            <td colspan="3">
+            <td colspan="4">
                 <div class="empty-state">
                     <i class="bi bi-list-check"></i>
                     <p>暂无子任务，点击右上角添加</p>

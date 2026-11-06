@@ -118,3 +118,109 @@ class ChecklistTemplateDeleteTest(TestCase):
         resp = self.client.post(f'/templates/checklist/{self.item.pk}/delete/')
         self.assertEqual(resp.status_code, 302)
         self.assertFalse(ChecklistItemTemplate.objects.filter(pk=self.item.pk).exists())
+
+
+class TaskTemplatePredecessorTest(TestCase):
+    """流程模板里可以给子任务设置前置项，留空即无前置。"""
+
+    def setUp(self):
+        self.dept = Department.objects.create(name='流程模板部')
+        self.admin = User.objects.create_user(username='tpl-admin', password='pass')
+        self.admin.profile.role = 'admin'
+        self.admin.profile.save()
+        self.stage1 = StageTemplate.objects.create(
+            name='设计阶段', order=1, department=self.dept,
+        )
+        self.stage2 = StageTemplate.objects.create(
+            name='包装阶段', order=2, department=self.dept,
+        )
+        self.task_a = TaskTemplate.objects.create(
+            stage_template=self.stage1, name='完成设计稿', order=1,
+        )
+        self.task_b = TaskTemplate.objects.create(
+            stage_template=self.stage1, name='内部评审', order=2,
+        )
+        self.task_c = TaskTemplate.objects.create(
+            stage_template=self.stage2, name='开始打样', order=1,
+        )
+        self.client.login(username='tpl-admin', password='pass')
+
+    def test_create_task_with_cross_stage_predecessor(self):
+        response = self.client.post(
+            f'/templates/stages/{self.stage1.pk}/tasks/create/',
+            {
+                'name': '确认包装结构',
+                'order': '3',
+                'depends_on': self.task_c.pk,
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        task = TaskTemplate.objects.get(name='确认包装结构')
+        self.assertEqual(task.depends_on_id, self.task_c.pk)
+
+    def test_edit_without_predecessor_clears_it(self):
+        self.task_b.depends_on = self.task_a
+        self.task_b.save(update_fields=['depends_on'])
+
+        response = self.client.post(
+            f'/templates/tasks/{self.task_b.pk}/edit/',
+            {'name': self.task_b.name, 'order': '2', 'depends_on': ''},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.task_b.refresh_from_db()
+        self.assertIsNone(self.task_b.depends_on_id)
+
+    def test_edit_rejects_self_predecessor(self):
+        response = self.client.post(
+            f'/templates/tasks/{self.task_b.pk}/edit/',
+            {
+                'name': self.task_b.name,
+                'order': '2',
+                'depends_on': self.task_b.pk,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.task_b.refresh_from_db()
+        self.assertIsNone(self.task_b.depends_on_id)
+        self.assertContains(response, '前置任务不能是任务自身')
+
+    def test_edit_rejects_cycle(self):
+        self.task_b.depends_on = self.task_a
+        self.task_b.save(update_fields=['depends_on'])
+
+        response = self.client.post(
+            f'/templates/tasks/{self.task_a.pk}/edit/',
+            {
+                'name': self.task_a.name,
+                'order': '1',
+                'depends_on': self.task_b.pk,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.task_a.refresh_from_db()
+        self.assertIsNone(self.task_a.depends_on_id)
+        self.assertContains(response, '不能设为前置任务')
+
+    def test_form_lists_predecessors_grouped_by_stage(self):
+        response = self.client.get(
+            f'/templates/tasks/{self.task_b.pk}/edit/',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '<optgroup label="设计阶段">')
+        self.assertContains(response, '<optgroup label="包装阶段">')
+        self.assertContains(response, '开始打样')
+
+    def test_list_shows_predecessor(self):
+        self.task_c.depends_on = self.task_a
+        self.task_c.save(update_fields=['depends_on'])
+
+        response = self.client.get(
+            f'/templates/stages/{self.stage2.pk}/tasks/',
+        )
+
+        self.assertContains(response, '设计阶段 · 完成设计稿')

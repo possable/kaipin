@@ -948,6 +948,26 @@ class DueBeforeReminderTest(TestCase):
         self.assertIn('「到期测试阶段」阶段', admin_msgs[0])
         self.assertIn('「到期测试品」项目', admin_msgs[0])
 
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_blocked_task_gets_no_due_reminder(self, mock_send):
+        """前置任务未完成时任务还不能开始，即使有到期日期也不催。"""
+        blocker = Task.objects.create(
+            product_stage=self.stage, name='尚未完成的前置任务', order=2,
+            status='in_progress', assignee=self.task_assignee,
+            started_at=timezone.now() - timedelta(days=1),
+            expected_end_date=self.today + timedelta(days=30),
+        )
+        self.task.depends_on = blocker
+        self.task.save(update_fields=['depends_on'])
+        self._set_task_due_in(2)
+
+        scan_and_remind()
+
+        mock_send.assert_not_called()
+        self.assertFalse(
+            ReminderLog.objects.filter(task=self.task, reminder_type='upcoming').exists()
+        )
+
 
 class IncompleteTaskReminderTest(TestCase):
     """子任务缺执行人/开始时间/结束时间时，每天提醒阶段负责人，补齐即停。"""
@@ -1086,6 +1106,23 @@ class IncompleteTaskReminderTest(TestCase):
         self.stage_owner.profile.wechat_userid = ''
         self.stage_owner.profile.save()
         self._clear(assignee=None, started_at=None, expected_end_date=None)
+
+        scan_and_remind()
+
+        mock_send.assert_not_called()
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_blocked_task_does_not_trigger_missing_field_reminder(self, mock_send):
+        """前置任务没完成时开始时间本来就不该填，不能天天催阶段负责人。"""
+        blocker = Task.objects.create(
+            product_stage=self.stage, name='尚未完成的前置任务', order=2,
+            status='in_progress', assignee=self.executor,
+            started_at=timezone.now() - timedelta(days=1),
+            expected_end_date=self.today + timedelta(days=30),
+        )
+        self.task.depends_on = blocker
+        self.task.started_at = None
+        self.task.save(update_fields=['depends_on', 'started_at'])
 
         scan_and_remind()
 

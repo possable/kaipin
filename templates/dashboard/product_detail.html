@@ -148,7 +148,7 @@
 // 所有用户列表（供 JS 使用）
 const ALL_USERS = [{% for u in all_users %}{id:{{u.id}},name:"{{u.first_name|default:u.username|escapejs}}"}{% if not forloop.last %},{% endif %}{% endfor %}];
 </script>
-<script src="{% static 'js/app.js' %}?v=20261103-nodelete"></script>
+<script src="{% static 'js/app.js' %}?v=20261106-predecessor"></script>
 {% if setup_mode %}
 <script>
 // 关闭「设置项目流程」窗口：右上角 ×、点遮罩空白处、Esc、稍后设置都走这里。

@@ -184,7 +184,8 @@ async function flushDirtyFields(root = document) {
     const entries = Array.from(DIRTY_FIELDS.entries())
         .filter(([el, info]) => info.url && el.isConnected)
         .sort(([, a], [, b]) => {
-            const order = {expected_end_date: 0, started_at: 1};
+            // 前置任务先落库：它决定开始时间还能不能填
+            const order = {predecessor: -1, expected_end_date: 0, started_at: 1};
             return (order[a.field] ?? 2) - (order[b.field] ?? 2);
         });
     const failures = [];
