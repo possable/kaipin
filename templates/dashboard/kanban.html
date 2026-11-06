@@ -51,7 +51,7 @@
                data-userid="{{ filter_assignee }}">
         <input type="hidden" name="assignee" id="assignee-hidden" value="{{ filter_assignee }}">
         <datalist id="users-datalist">
-            {% for u in all_users %}
+            {% for u in filter_users %}
             <option value="{{ u.first_name|default:u.username }}{% if not u.is_active %} (已离职){% endif %}" data-id="{{ u.id }}">
             {% endfor %}
         </datalist>
@@ -308,7 +308,7 @@
 const ALL_USERS = [{% for u in all_users %}{id:{{u.id}},name:"{{u.first_name|default:u.username|escapejs}}"}{% if not forloop.last %},{% endif %}{% endfor %}];
 
 </script>
-<script src="{% static 'js/app.js' %}?v=20261106-predecessor"></script>
+<script src="{% static 'js/app.js' %}?v=20261106-users"></script>
 <script>
 const assigneeInput = document.getElementById('assignee-input');
 if (assigneeInput) {

@@ -35,12 +35,13 @@
         return panel;
     }
 
-    // 从页面上的 datalist 收集候选人。多个 datalist 可能同时存在（看板一份、
-    // 弹窗一份），内容一样，按「名字 + id」去重即可。
+    // 从输入框自己声明的 datalist 收集候选人。不同输入框的候选范围可能不同：
+    // 看板筛选框要保留离职员工，项目/阶段的负责人输入框只显示在职员工，
+    // 所以不能把页面上的所有 datalist 混在一起用。
     function collectUsers(el) {
-        const listIds = [];
-        if (el.dataset.suggestList) listIds.push(el.dataset.suggestList);
-        listIds.push('users-datalist', 'modal-users-datalist');
+        const listIds = el.dataset.suggestList
+            ? [el.dataset.suggestList]
+            : ['users-datalist', 'modal-users-datalist'];
 
         const seenLists = new Set();
         const seenUsers = new Set();
@@ -60,6 +61,23 @@
                 users.push({ name: name, id: uid });
             });
         });
+
+        // 输入框声明的 datalist 不在当前页面时（如弹窗片段被单独加载），
+        // 优先退回 active 的 modal 列表，而不是可能含离职员工的筛选列表
+        if (!users.length) {
+            const fallback = document.getElementById('modal-users-datalist');
+            if (fallback) {
+                fallback.querySelectorAll('option').forEach(function (opt) {
+                    const name = (opt.value || '').trim();
+                    if (!name) return;
+                    const uid = opt.dataset.id || opt.getAttribute('data-id') || '';
+                    const key = name + '\u0000' + uid;
+                    if (seenUsers.has(key)) return;
+                    seenUsers.add(key);
+                    users.push({ name: name, id: uid });
+                });
+            }
+        }
 
         if (!users.length && typeof ALL_USERS !== 'undefined' && Array.isArray(ALL_USERS)) {
             ALL_USERS.forEach(function (u) {

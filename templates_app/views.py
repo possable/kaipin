@@ -154,7 +154,9 @@ def stage_template_create(request):
             messages.success(request, f'阶段 "{data["name"]}" 已添加。')
             return redirect('stage_template_list')
     departments = Department.objects.all()
-    all_users = User.objects.select_related('profile').order_by('first_name', 'username')
+    all_users = User.objects.filter(is_active=True).select_related('profile').order_by(
+        'first_name', 'username'
+    )
     return render(request, 'templates_app/stage_template_form.html', {
         'departments': departments,
         'all_users': all_users,
@@ -179,7 +181,9 @@ def stage_template_edit(request, pk):
             messages.success(request, f'阶段 "{stage.name}" 已更新。')
             return redirect('stage_template_list')
     departments = Department.objects.all()
-    all_users = User.objects.select_related('profile').order_by('first_name', 'username')
+    all_users = User.objects.filter(is_active=True).select_related('profile').order_by(
+        'first_name', 'username'
+    )
     return render(request, 'templates_app/stage_template_form.html', {
         'stage': stage,
         'departments': departments,

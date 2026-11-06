@@ -862,6 +862,22 @@ class ProductCreatePermissionTest(TestCase):
         response = self.client.get(reverse('product_create'))
         self.assertEqual(response.status_code, 403)
 
+    def test_assignee_picker_only_lists_active_users(self):
+        """人员选择只显示在职员工，离职员工不出现在下拉候选里。"""
+        User.objects.create_user(
+            username='active-picker', password='pass', first_name='在职员工',
+        )
+        User.objects.create_user(
+            username='left-picker', password='pass', first_name='离职员工',
+            is_active=False,
+        )
+        self.client.login(username='product-member', password='pass')
+
+        response = self.client.get(reverse('product_create'))
+
+        self.assertContains(response, '在职员工')
+        self.assertNotContains(response, '离职员工')
+
 
 class ProductSetupStagesTest(TestCase):
     """新建项目后的「设置项目流程」窗口：一次性设置阶段负责人和起止时间。"""
@@ -965,6 +981,24 @@ class ProductSetupStagesTest(TestCase):
         self.assertEqual(response.status_code, 403)
         self.stage1.refresh_from_db()
         self.assertIsNone(self.stage1.assignee_id)
+
+    @patch('products.views.send_message_to_user', return_value=True)
+    def test_setup_assignment_notification_includes_dates(self, mock_send):
+        """分工时新负责人收到的提醒要带阶段起止时间，而不只是一句“请关注”。"""
+        self.owner.profile.wechat_userid = 'wx_setup_owner'
+        self.owner.profile.save()
+        self.client.login(username='setup-creator', password='pass')
+
+        self._post()
+
+        mock_send.assert_called_once()
+        recipient, content = mock_send.call_args.args
+        self.assertEqual(recipient, self.owner)
+        self.assertIn(f'开始时间：{self.today.isoformat()}', content)
+        self.assertIn(
+            f'预计结束：{(self.today + timedelta(days=10)).isoformat()}',
+            content,
+        )
 
 
 class ProductPauseResumeTest(TestCase):

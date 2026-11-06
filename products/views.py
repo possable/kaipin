@@ -203,8 +203,18 @@ def _notify_new_assignee(entity, old_assignee, new_assignee, changed_by, context
     content = (
         f'{recipient_name}你好，我是项目管理智能机器人。\n'
         f'{changer_name} 已将你设为 {context} 的负责人，请及时关注。\n'
-        f'点击查看：{settings.SITE_URL}'
     )
+    # 项目组分工时把起止时间一并带上，避免新负责人只收到一句“请关注”
+    start = getattr(entity, 'started_at', None)
+    if start and timezone.is_aware(start):
+        start = timezone.localtime(start).date()
+    end = getattr(entity, 'expected_end_date', None)
+    if start or end:
+        content += (
+            f'开始时间：{_fmt_notify_date(start)}　'
+            f'预计结束：{_fmt_notify_date(end)}\n'
+        )
+    content += f'点击查看：{settings.SITE_URL}'
 
     try:
         # 按收件人所在企业发送，避免用错企业的应用导致消息静默丢失
@@ -411,7 +421,9 @@ def product_create(request):
         raise PermissionDenied
     has_templates = StageTemplate.objects.exists()
 
-    all_users = User.objects.select_related('profile').order_by('first_name', 'username')
+    all_users = User.objects.filter(is_active=True).select_related('profile').order_by(
+        'first_name', 'username'
+    )
 
     if request.method == 'POST':
         name = request.POST.get('name', '').strip()
@@ -689,7 +701,9 @@ def product_detail(request, pk):
     is_admin, can_manage = _annotate_stage_permissions(product, stages, request.user)
 
     # 所有用户列表（供负责人选择）
-    all_users = User.objects.select_related('profile').order_by('first_name', 'username')
+    all_users = User.objects.filter(is_active=True).select_related('profile').order_by(
+        'first_name', 'username'
+    )
 
     # ?setup=1：新建项目后的「设置项目流程」窗口。创建人也要能设置，
     # 否则产品部同事建完项目、负责人填的是别人时，自己进不去这个窗口。
@@ -946,7 +960,9 @@ def stage_detail_modal(request, stage_id):
     is_admin, can_manage = _annotate_stage_permissions(product, stages, request.user)
     stage = stages.first()
 
-    all_users = User.objects.select_related('profile').order_by('first_name', 'username')
+    all_users = User.objects.filter(is_active=True).select_related('profile').order_by(
+        'first_name', 'username'
+    )
 
     return render(request, 'dashboard/_stage_detail.html', {
         'stage': stage,
@@ -954,6 +970,8 @@ def stage_detail_modal(request, stage_id):
         'is_admin': is_admin,
         'can_manage': can_manage,
         'all_users': all_users,
+        # 弹窗里的负责人候选用 modal 列表（仅在职），不要退到看板筛选列表（含离职）
+        'datalist_id': 'modal-users-datalist',
     })
 
 

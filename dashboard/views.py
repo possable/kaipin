@@ -174,8 +174,11 @@ def kanban(request):
     stage_templates_ordered = list(StageTemplate.objects.order_by('order'))
     kpi_stage_templates = stage_templates_ordered[:-1]
 
-    # 获取所有用户供负责人下拉列表
-    all_users = User.objects.select_related('profile').order_by(
+    # 人员选择只展示在职员工；筛选框保留离职员工，方便查历史项目
+    all_users = User.objects.filter(is_active=True).select_related('profile').order_by(
+        'first_name', 'username'
+    )
+    filter_users = User.objects.select_related('profile').order_by(
         '-is_active', 'first_name', 'username'
     )
 
@@ -248,6 +251,7 @@ def kanban(request):
         'page_obj': page_obj,
         'has_products': bool(products_flat),
         'all_users': all_users,
+        'filter_users': filter_users,
         'search_q': q,
         'filter_assignee': assignee_id,
         'filter_assignee_name': assignee_name,
@@ -660,7 +664,10 @@ def archive(request):
         'has_filter': bool(
             q or assignee_id or brand_filter or category_filter or date_from or date_to
         ),
-        'all_users': User.objects.select_related('profile').order_by(
+        'all_users': User.objects.filter(is_active=True).select_related('profile').order_by(
+            'first_name', 'username'
+        ),
+        'filter_users': User.objects.select_related('profile').order_by(
             '-is_active', 'first_name', 'username'
         ),
         'search_q': q,

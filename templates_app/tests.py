@@ -48,6 +48,20 @@ class StageTemplateEditTest(TestCase):
         self.stage.refresh_from_db()
         self.assertIsNone(self.stage.default_assignee_id)
 
+    def test_default_assignee_picker_only_lists_active_users(self):
+        User.objects.create_user(
+            username='template-active', password='pass', first_name='在职员工',
+        )
+        User.objects.create_user(
+            username='template-left', password='pass', first_name='离职员工',
+            is_active=False,
+        )
+
+        resp = self.client.get(f'/templates/stages/{self.stage.pk}/edit/')
+
+        self.assertContains(resp, '在职员工')
+        self.assertNotContains(resp, '离职员工')
+
 
 class StageTemplateDeleteTest(TestCase):
     """回归：删除确认页曾复用编辑表单但未传 departments，导致必填下拉框为空、

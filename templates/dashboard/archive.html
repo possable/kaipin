@@ -43,7 +43,7 @@
                data-userid="{{ filter_assignee }}">
         <input type="hidden" name="assignee" id="assignee-hidden" value="{{ filter_assignee }}">
         <datalist id="users-datalist">
-            {% for u in all_users %}
+            {% for u in filter_users %}
             <option value="{{ u.first_name|default:u.username }}{% if not u.is_active %} (已离职){% endif %}" data-id="{{ u.id }}">
             {% endfor %}
         </datalist>
@@ -158,7 +158,7 @@
 
 {% block extra_js %}
 {% load static %}
-<script src="{% static 'js/app.js' %}?v=20261106-predecessor"></script>
+<script src="{% static 'js/app.js' %}?v=20261106-users"></script>
 <script>
 // 负责人输入框 ↔ 隐藏的 assignee id：选中 datalist 里的人名才带上 id，手打的不作数
 const assigneeInput = document.getElementById('assignee-input');

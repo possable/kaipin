@@ -446,6 +446,14 @@ async function addTask(stageId) {
     const input = document.getElementById(`new-task-name-${stageId}`);
     const name = input.value.trim();
     if (!name) { showToast('请输入任务名称', 'warning'); return; }
+    // 页面级添加会把整页刷新掉，先落库，避免上面刚改的执行人/时间被旧数据覆盖
+    if (!isStageModalOpen()) {
+        const failures = await flushDirtyFields(document);
+        if (failures.length > 0) {
+            showToast(`还有改动没保存：${failures[0]}，已取消添加`, 'error');
+            return;
+        }
+    }
     disableButtons();
     const formData = new FormData();
     formData.append('name', name);

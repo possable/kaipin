@@ -70,13 +70,10 @@
 
 {% if setup_mode %}
 {# 新建项目后的引导窗口：趁创建人还在页面上，把各阶段负责人和起止时间补齐 #}
-<div id="setup-modal-overlay" class="modal-overlay" onclick="closeSetupModal(event)">
-    <div class="modal-box setup-modal-box" onclick="event.stopPropagation()">
+<div id="setup-modal-overlay" class="modal-overlay">
+    <div class="modal-box setup-modal-box">
         <div class="modal-header">
             <span>设置项目流程</span>
-            <button type="button" class="modal-close-btn" onclick="closeSetupModal(event)" title="关闭">
-                <i class="bi bi-x-lg"></i>
-            </button>
         </div>
         <form id="setup-stages-form" method="post" action="{% url 'product_setup_stages' product.pk %}">
             {% csrf_token %}
@@ -148,10 +145,10 @@
 // 所有用户列表（供 JS 使用）
 const ALL_USERS = [{% for u in all_users %}{id:{{u.id}},name:"{{u.first_name|default:u.username|escapejs}}"}{% if not forloop.last %},{% endif %}{% endfor %}];
 </script>
-<script src="{% static 'js/app.js' %}?v=20261106-predecessor"></script>
+<script src="{% static 'js/app.js' %}?v=20261106-users"></script>
 {% if setup_mode %}
 <script>
-// 关闭「设置项目流程」窗口：右上角 ×、点遮罩空白处、Esc、稍后设置都走这里。
+// 关闭「设置项目流程」窗口：只能通过「稍后设置」按钮退出（或直接保存）。
 // 只收起窗口并把地址栏的 ?setup=1 去掉，不提交、不刷新页面。
 function closeSetupModal(event) {
     if (event) {
@@ -164,12 +161,6 @@ function closeSetupModal(event) {
     url.searchParams.delete('setup');
     window.history.replaceState(null, '', url.pathname + url.search);
 }
-
-document.addEventListener('keydown', function (event) {
-    if (event.key === 'Escape' && document.getElementById('setup-modal-overlay')) {
-        closeSetupModal();
-    }
-});
 
 // 「设置项目流程」窗口：负责人输入的是姓名，提交时后端只认 id，这里同步到隐藏字段
 (function () {
