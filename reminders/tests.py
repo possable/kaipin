@@ -919,7 +919,8 @@ class DueBeforeReminderTest(TestCase):
         mock_send.assert_not_called()
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
-    def test_same_day_scan_twice_does_not_duplicate(self, mock_send):
+    def test_same_person_gets_one_merged_message(self, mock_send):
+        """同一个人当天有多条即将到期提醒时，合并成一条；重复扫描也不重发。"""
         self._set_task_due_in(2)
         self._set_stage_due_in(2)
         self._set_product_due_in(2)
@@ -928,9 +929,24 @@ class DueBeforeReminderTest(TestCase):
         scan_and_remind()
 
         self.assertEqual(len(self._contents_to(mock_send, 'wx_due_ta')), 1)
-        self.assertEqual(len(self._contents_to(mock_send, 'wx_due_so')), 2)  # 任务 + 阶段
-        self.assertEqual(len(self._contents_to(mock_send, 'wx_due_po')), 3)  # 任务 + 阶段 + 项目
-        self.assertEqual(len(self._contents_to(mock_send, 'wx_due_admin')), 2)  # 阶段 + 项目
+
+        stage_owner_msgs = self._contents_to(mock_send, 'wx_due_so')
+        self.assertEqual(len(stage_owner_msgs), 1)
+        self.assertIn('以下 2 项即将到期', stage_owner_msgs[0])
+        self.assertIn('「到期测试任务」子任务', stage_owner_msgs[0])
+        self.assertIn('「到期测试阶段」阶段', stage_owner_msgs[0])
+
+        product_owner_msgs = self._contents_to(mock_send, 'wx_due_po')
+        self.assertEqual(len(product_owner_msgs), 1)
+        self.assertIn('以下 3 项即将到期', product_owner_msgs[0])
+        for expected in ('「到期测试任务」子任务', '「到期测试阶段」阶段', '「到期测试品」项目'):
+            self.assertIn(expected, product_owner_msgs[0])
+
+        admin_msgs = self._contents_to(mock_send, 'wx_due_admin')
+        self.assertEqual(len(admin_msgs), 1)
+        self.assertIn('以下 2 项即将到期', admin_msgs[0])
+        self.assertIn('「到期测试阶段」阶段', admin_msgs[0])
+        self.assertIn('「到期测试品」项目', admin_msgs[0])
 
 
 class IncompleteTaskReminderTest(TestCase):

@@ -420,100 +420,115 @@ def _dedupe_recipients(candidates):
     return result
 
 
-def notify_stages_due_upward(stages, today):
-    """阶段到期前提醒：阶段负责人 + 上一级品负责人 + 管理员（向上两级）。
+def _upcoming_item(recipient, line, days_left, target_type, target_id, target_name):
+    return {
+        'recipient': recipient,
+        'line': line,
+        'days_left': days_left,
+        'target_type': target_type,
+        'target_id': target_id,
+        'target_name': target_name,
+    }
 
-    只处理 expected_end_date 已落在 D-3 ~ D-1 的未完成阶段；
-    已完成阶段在扫描阶段就被排除了，不会继续提醒。
-    返回成功发送的消息条数。
-    """
+
+def collect_stage_due_items(stages, today):
+    """收集阶段到期前提醒（阶段负责人 + 品负责人 + 管理员），不发送。"""
     stages = list(stages)
     if not stages:
-        return 0
+        return []
 
     try:
         admins = _admin_recipients()
     except Exception:
-        logger.exception('notify_stages_due_upward 解析管理员失败')
+        logger.exception('collect_stage_due_items 解析管理员失败')
         admins = []
 
-    sent = 0
+    items = []
     for stage in stages:
         if not stage.expected_end_date:
             continue
         days_left = (stage.expected_end_date - today).days
         end_date = stage.expected_end_date.strftime('%Y-%m-%d')
+        line = (
+            f'「{stage.product.name}」·「{stage.name}」阶段：'
+            f'预计 {end_date} 结束，距离截止还有 {days_left} 天。'
+        )
         recipients = _dedupe_recipients(
             [(stage.assignee, 'stage'), (stage.product.assignee, 'product')]
             + [(admin, 'admin') for admin in admins]
         )
-
-        for recipient, role in recipients:
-            if role == 'stage':
-                situation = (
-                    f'你负责的「{stage.product.name}」项目「{stage.name}」阶段'
-                    f'预计 {end_date} 结束，距离截止还有 {days_left} 天，请及时推进。'
-                )
-            elif role == 'product':
-                situation = (
-                    f'你负责的「{stage.product.name}」项目，「{stage.name}」阶段'
-                    f'预计 {end_date} 结束，距离截止还有 {days_left} 天，请关注。'
-                )
-            else:
-                situation = (
-                    f'「{stage.product.name}」项目的「{stage.name}」阶段'
-                    f'预计 {end_date} 结束，距离截止还有 {days_left} 天，请关注。'
-                )
-            if send_notice(recipient, situation, 'stage', stage.pk, stage.name, '临近'):
-                sent += 1
-    return sent
+        for recipient, _role in recipients:
+            items.append(_upcoming_item(
+                recipient, line, days_left, 'stage', stage.pk, stage.name,
+            ))
+    return items
 
 
-def notify_products_due_upward(products, today):
-    """项目到期前提醒：品负责人 + 管理员（再往上一级）。
-
-    只处理 expected_end_date 已落在 D-3 ~ D-1 的进行中项目。
-    返回成功发送的消息条数。
-    """
+def collect_product_due_items(products, today):
+    """收集项目到期前提醒（品负责人 + 管理员），不发送。"""
     products = list(products)
     if not products:
-        return 0
+        return []
 
     try:
         admins = _admin_recipients()
     except Exception:
-        logger.exception('notify_products_due_upward 解析管理员失败')
+        logger.exception('collect_product_due_items 解析管理员失败')
         admins = []
 
-    sent = 0
+    items = []
     for product in products:
         if not product.expected_end_date:
             continue
         days_left = (product.expected_end_date - today).days
         end_date = product.expected_end_date.strftime('%Y-%m-%d')
+        line = (
+            f'「{product.name}」项目：预计 {end_date} 结束，'
+            f'距离截止还有 {days_left} 天。'
+        )
         recipients = _dedupe_recipients(
             [(product.assignee, 'product')]
             + [(admin, 'admin') for admin in admins]
         )
-        owner_name = (
-            (product.assignee.first_name or product.assignee.username)
-            if product.assignee else '未指定'
-        )
+        for recipient, _role in recipients:
+            items.append(_upcoming_item(
+                recipient, line, days_left, 'product', product.pk, product.name,
+            ))
+    return items
 
-        for recipient, role in recipients:
-            if role == 'product':
-                situation = (
-                    f'你负责的项目「{product.name}」预计 {end_date} 结束，'
-                    f'距离截止还有 {days_left} 天，请及时安排收尾。'
-                )
-            else:
-                situation = (
-                    f'项目「{product.name}」（负责人：{owner_name}）预计 {end_date} 结束，'
-                    f'距离截止还有 {days_left} 天，请关注。'
-                )
-            if send_notice(recipient, situation, 'product', product.pk, product.name, '临近'):
-                sent += 1
-    return sent
+
+def send_upcoming_aggregate(items):
+    """把同一个人的多条「即将到期」提醒合并成一条消息。
+
+    返回成功收到消息的账号 id 集合；调用方据此写任务级去重日志。
+    """
+    groups = {}
+    for item in items:
+        recipient = item['recipient']
+        if recipient is None:
+            continue
+        groups.setdefault(recipient.id, (recipient, []))[1].append(item)
+
+    sent_recipient_ids = set()
+    for recipient_id, (recipient, rows) in groups.items():
+        # 越紧迫的排在前面；同一天的保持收集顺序（任务 → 阶段 → 项目）
+        rows.sort(key=lambda row: row['days_left'])
+        lines = [
+            f'{idx}. {row["line"]}'
+            for idx, row in enumerate(rows, 1)
+        ]
+        situation = (
+            f'以下 {len(rows)} 项即将到期，请及时处理：\n'
+            + '\n'.join(lines)
+        )
+        first = rows[0]
+        if send_notice(
+            recipient, situation,
+            first['target_type'], first['target_id'], first['target_name'],
+            '临近',
+        ):
+            sent_recipient_ids.add(recipient_id)
+    return sent_recipient_ids
 
 
 def notify_incomplete_tasks_upward(stage_tasks):

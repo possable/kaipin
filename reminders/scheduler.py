@@ -8,12 +8,13 @@ from products.models import Task, ProductStage, Product
 from activity_log.utils import log_action
 from .models import ReminderLog, UpwardNotifyLog
 from .upward_notify import (
+    collect_product_due_items,
+    collect_stage_due_items,
     notify_incomplete_tasks_upward,
-    notify_products_due_upward,
     notify_products_overdue_upward,
     notify_stage_owners_overdue_upward,
-    notify_stages_due_upward,
     notify_stages_overdue_upward,
+    send_upcoming_aggregate,
 )
 from .wechat import send_message_to_user
 
@@ -72,6 +73,9 @@ def scan_and_remind():
     )
 
     sent_count = 0
+    # 到期前提醒先按「人」收集，扫描末尾同一个人只发一条
+    upcoming_items = []
+    upcoming_task_recipients = {}
     for task in tasks:
         # 先根据时间自动更新状态
         task.update_status()
@@ -133,50 +137,22 @@ def scan_and_remind():
                 logger.info('超期提醒已发送: %s -> %s', task.name, task.assignee.username)
             continue
 
-        # 到期前：执行人 + 阶段负责人 + 品负责人（向上两级）
-        sent_any = False
-        for recipient, role in _upcoming_task_recipients(task):
-            recipient_name = recipient.first_name or recipient.username
-            if role == 'assignee':
-                situation = (
-                    f'你负责的「{product_name}」项目，在「{stage_name}」阶段的'
-                    f'「{task.name}」事项，预计 {end_date_str} 完成，'
-                    f'距离截止还有 {days_left} 天，请及时处理。'
-                )
-            elif role == 'stage':
-                situation = (
-                    f'你负责的「{product_name}」项目「{stage_name}」阶段，'
-                    f'其下「{task.name}」事项预计 {end_date_str} 完成，'
-                    f'距离截止还有 {days_left} 天，请及时推进。'
-                )
-            else:
-                situation = (
-                    f'你负责的「{product_name}」项目，「{stage_name}」阶段的'
-                    f'「{task.name}」事项预计 {end_date_str} 完成，'
-                    f'距离截止还有 {days_left} 天，请关注。'
-                )
-            content = (
-                f'{recipient_name}你好，我是项目管理智能机器人。\n'
-                f'{situation}\n'
-                f'点击查看：{settings.SITE_URL}'
-            )
-            try:
-                success = send_message_to_user(recipient, content)
-            except Exception:
-                logger.exception('临近提醒发送异常: task=%s recipient=%s',
-                                 task.pk, recipient.username)
-                success = False
-            if success:
-                sent_any = True
-                log_action(None, '系统提醒', 'task', task.id,
-                           f'致 {recipient_name} · {task.name}', '临近提醒')
-                logger.info('临近提醒已发送: %s -> %s', task.name, recipient.username)
-
-        if sent_any:
-            ReminderLog.objects.create(task=task, reminder_type='upcoming')
-            sent_count += 1
-
-    logger.info(f'定时提醒扫描完成，共发送 {sent_count} 条提醒')
+        # 到期前：执行人 + 阶段负责人 + 品负责人（向上两级）。
+        # 这里只收集，末尾统一发送；同一个人当天多条会合并成一条。
+        line = (
+            f'「{product_name}」·「{stage_name}」·「{task.name}」子任务：'
+            f'预计 {end_date_str} 完成，距离截止还有 {days_left} 天。'
+        )
+        for recipient, _role in _upcoming_task_recipients(task):
+            upcoming_items.append({
+                'recipient': recipient,
+                'line': line,
+                'days_left': days_left,
+                'target_type': 'task',
+                'target_id': task.id,
+                'target_name': task.name,
+            })
+            upcoming_task_recipients.setdefault(task.id, set()).add(recipient.id)
 
     # ---- 子任务必填信息缺失：每天提醒阶段负责人，直到补齐 ----
     # 只管进行中阶段里的未完成任务：后续阶段的字段还没到填的时候，
@@ -249,9 +225,9 @@ def scan_and_remind():
 
     if due_stages:
         try:
-            notify_stages_due_upward(due_stages, today)
+            upcoming_items.extend(collect_stage_due_items(due_stages, today))
         except Exception:
-            logger.exception('阶段到期前通知失败')
+            logger.exception('阶段到期前通知收集失败')
 
     due_products = []
     for product in Product.objects.filter(
@@ -276,9 +252,27 @@ def scan_and_remind():
 
     if due_products:
         try:
-            notify_products_due_upward(due_products, today)
+            upcoming_items.extend(collect_product_due_items(due_products, today))
         except Exception:
-            logger.exception('项目到期前通知失败')
+            logger.exception('项目到期前通知收集失败')
+
+    # ---- 到期前提醒统一发送：同一个人多条合并成一条 ----
+    if upcoming_items:
+        try:
+            sent_recipients = send_upcoming_aggregate(upcoming_items)
+        except Exception:
+            logger.exception('到期前合并提醒发送失败')
+            sent_recipients = set()
+
+        # 任务级去重：只要该任务有任一收件人成功收到，当天就不再发
+        for task_id, recipient_ids in upcoming_task_recipients.items():
+            if recipient_ids & sent_recipients:
+                ReminderLog.objects.create(
+                    task_id=task_id, reminder_type='upcoming',
+                )
+                sent_count += 1
+
+    logger.info(f'定时提醒扫描完成，共发送 {sent_count} 条提醒')
 
     # ---- 阶段/品超期聚合检测：通知上一级负责人，按天去重 ----
 
