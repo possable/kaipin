@@ -38,8 +38,9 @@ class TaskTemplate(models.Model):
     name = models.CharField(max_length=200, verbose_name='任务名称')
     order = models.PositiveIntegerField(default=0, verbose_name='排序')
     is_milestone = models.BooleanField(default=False, verbose_name='是否里程碑')
-    depends_on = models.ForeignKey(
-        'self', on_delete=models.SET_NULL, null=True, blank=True,
+    # 前置任务可以有多个：全部完成后，新建项目里的对应任务才会解锁
+    depends_on = models.ManyToManyField(
+        'self', symmetrical=False, blank=True,
         related_name='dependents', verbose_name='前置任务',
     )
 

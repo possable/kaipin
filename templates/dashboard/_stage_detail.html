@@ -38,7 +38,7 @@
         <thead>
             <tr>
                 <th>任务</th>
-                <th style="width:120px;">前置任务</th>
+                <th style="width:120px;white-space:nowrap;">前置任务</th>
                 <th style="width:80px;">执行人</th>
                 <th style="width:115px;white-space:nowrap;">开始</th>
                 <th style="width:115px;white-space:nowrap;">预计结束</th>
@@ -66,23 +66,31 @@
                 </td>
                 <td>
                     {% if task.can_manage_time %}
-                    <select class="form-input task-field" data-field="predecessor" data-task-id="{{ task.pk }}"
-                            style="font-size:11px;padding:3px 4px;width:110px;"
-                            title="前置任务未完成时，本任务不能开始">
-                        <option value="">无</option>
-                        {% for group in task.predecessor_groups %}
-                        <optgroup label="{{ group.stage.name }}">
+                    <div class="pred-dropdown" data-task-id="{{ task.pk }}">
+                        <button type="button" class="pred-toggle"
+                                title="点开勾选，可多选；所有前置任务都完成后，本任务才能开始">
+                            <span class="pred-label"{% if not task.predecessor_ids %} style="color:var(--muted);"{% endif %}>{% for p in task.depends_on.all %}{% if p.product_stage_id != stage.pk %}{{ p.product_stage.name }} · {% endif %}{{ p.name }}{% if not forloop.last %}、{% endif %}{% empty %}无{% endfor %}</span>
+                            <i class="bi bi-caret-down-fill"></i>
+                        </button>
+                        <div class="pred-menu" hidden>
+                            {% for group in task.predecessor_groups %}
+                            <div class="pred-group">{{ group.stage.name }}</div>
                             {% for candidate in group.tasks %}
-                            <option value="{{ candidate.pk }}" {% if task.depends_on_id == candidate.pk %}selected{% endif %}>
-                                {{ candidate.name }}（{% if candidate.status == 'completed' %}已完成{% else %}未完成{% endif %}）
-                            </option>
+                            <label class="pred-option">
+                                <input type="checkbox" value="{{ candidate.pk }}"
+                                       data-name="{% if group.stage.pk != stage.pk %}{{ group.stage.name }} · {% endif %}{{ candidate.name }}"
+                                       {% if candidate.pk in task.predecessor_ids %}checked{% endif %}>
+                                <span>{{ candidate.name }}（{% if candidate.status == 'completed' %}已完成{% else %}未完成{% endif %}）</span>
+                            </label>
                             {% endfor %}
-                        </optgroup>
-                        {% endfor %}
-                    </select>
-                    {% elif task.depends_on %}
-                    <span style="font-size:12px;" title="前置任务{% if task.is_blocked %}未完成{% else %}已完成{% endif %}">
-                        {% if task.depends_on.product_stage_id != stage.pk %}{{ task.depends_on.product_stage.name }} · {% endif %}{{ task.depends_on.name }}
+                            {% empty %}
+                            <div class="pred-empty">暂无可选的前置任务</div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% elif task.predecessor_ids %}
+                    <span style="font-size:12px;line-height:1.5;" title="前置任务{% if task.is_blocked %}未完成{% else %}已全部完成{% endif %}">
+                        {% for p in task.depends_on.all %}{% if p.product_stage_id != stage.pk %}{{ p.product_stage.name }} · {% endif %}{{ p.name }}{% if not forloop.last %}<br>{% endif %}{% endfor %}
                         {% if task.is_blocked %}<i class="bi bi-lock-fill" style="color:var(--color-gray-500);"></i>{% endif %}
                     </span>
                     {% else %}
@@ -91,7 +99,7 @@
                 </td>
                 <td>
                     <div style="display:flex;gap:2px;align-items:center;">
-                    {% if task.can_edit %}
+                    {% if task.can_manage_assignee %}
                     <input type="text" class="form-input task-field user-search" list="{{ datalist_id|default:'users-datalist' }}" data-field="assignee" data-task-id="{{ task.pk }}"
                            placeholder="搜索..." autocomplete="off"
                            style="font-size:11px;padding:3px 4px;width:90px;"

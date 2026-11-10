@@ -14,4 +14,4 @@ Group=root
 WorkingDirectory=/opt/kaipin
 EnvironmentFile=/opt/kaipin/.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/kaipin/venv311/bin/python manage.py scan_reminders
+ExecStart=/opt/kaipin/venv311/bin/python manage.py scan_reminders --mode other

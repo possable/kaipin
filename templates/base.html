@@ -7,7 +7,7 @@
     {% load static %}
     <link rel="stylesheet" href="{% static 'bootstrap.min.css' %}">
     <link rel="stylesheet" href="{% static 'fonts/bootstrap-icons.css' %}">
-    <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261104-setup">
+    <link rel="stylesheet" href="{% static 'css/app.css' %}?v=20261109-white-progress3">
 </head>
 <body>
 {% if user.is_authenticated %}
@@ -30,12 +30,13 @@
                 <i class="bi bi-archive"></i>
                 <span>项目归档</span>
             </a>
-            {% if user.profile.department.name == '产品部' or user.profile.is_admin %}
-            <div class="sidebar-section-label">管理</div>
+            {# 入口对所有登录用户可见；没有权限的人点击后由后端提示无权限 #}
             <a href="{% url 'product_create' %}" class="sidebar-item {% if request.resolver_match.url_name == 'product_create' %}active{% endif %}">
                 <i class="bi bi-plus-circle"></i>
                 <span>创建新品</span>
             </a>
+            {% if user.profile.department.name == '产品部' or user.profile.is_admin %}
+            <div class="sidebar-section-label">管理</div>
             {% endif %}
             {% if user.profile.is_admin %}
             <a href="{% url 'stage_template_list' %}" class="sidebar-item {% if 'stage_template' in request.resolver_match.url_name or 'task_template' in request.resolver_match.url_name %}active{% endif %}">

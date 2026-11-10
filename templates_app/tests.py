@@ -171,11 +171,30 @@ class TaskTemplatePredecessorTest(TestCase):
 
         self.assertEqual(response.status_code, 302)
         task = TaskTemplate.objects.get(name='确认包装结构')
-        self.assertEqual(task.depends_on_id, self.task_c.pk)
+        self.assertEqual(
+            list(task.depends_on.values_list('pk', flat=True)),
+            [self.task_c.pk],
+        )
+
+    def test_create_task_with_multiple_predecessors(self):
+        response = self.client.post(
+            f'/templates/stages/{self.stage1.pk}/tasks/create/',
+            {
+                'name': '确认包装结构',
+                'order': '3',
+                'depends_on': [self.task_a.pk, self.task_c.pk],
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        task = TaskTemplate.objects.get(name='确认包装结构')
+        self.assertEqual(
+            set(task.depends_on.values_list('pk', flat=True)),
+            {self.task_a.pk, self.task_c.pk},
+        )
 
     def test_edit_without_predecessor_clears_it(self):
-        self.task_b.depends_on = self.task_a
-        self.task_b.save(update_fields=['depends_on'])
+        self.task_b.depends_on.set([self.task_a])
 
         response = self.client.post(
             f'/templates/tasks/{self.task_b.pk}/edit/',
@@ -184,7 +203,7 @@ class TaskTemplatePredecessorTest(TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.task_b.refresh_from_db()
-        self.assertIsNone(self.task_b.depends_on_id)
+        self.assertFalse(self.task_b.depends_on.exists())
 
     def test_edit_rejects_self_predecessor(self):
         response = self.client.post(
@@ -198,12 +217,11 @@ class TaskTemplatePredecessorTest(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.task_b.refresh_from_db()
-        self.assertIsNone(self.task_b.depends_on_id)
+        self.assertFalse(self.task_b.depends_on.exists())
         self.assertContains(response, '前置任务不能是任务自身')
 
     def test_edit_rejects_cycle(self):
-        self.task_b.depends_on = self.task_a
-        self.task_b.save(update_fields=['depends_on'])
+        self.task_b.depends_on.set([self.task_a])
 
         response = self.client.post(
             f'/templates/tasks/{self.task_a.pk}/edit/',
@@ -216,7 +234,7 @@ class TaskTemplatePredecessorTest(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.task_a.refresh_from_db()
-        self.assertIsNone(self.task_a.depends_on_id)
+        self.assertFalse(self.task_a.depends_on.exists())
         self.assertContains(response, '不能设为前置任务')
 
     def test_form_lists_predecessors_grouped_by_stage(self):
@@ -230,8 +248,7 @@ class TaskTemplatePredecessorTest(TestCase):
         self.assertContains(response, '开始打样')
 
     def test_list_shows_predecessor(self):
-        self.task_c.depends_on = self.task_a
-        self.task_c.save(update_fields=['depends_on'])
+        self.task_c.depends_on.set([self.task_a])
 
         response = self.client.get(
             f'/templates/stages/{self.stage2.pk}/tasks/',

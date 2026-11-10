@@ -81,7 +81,7 @@
                 <p class="setup-intro">
                     项目「{{ product.name }}」已创建并发布。
                     项目周期：{{ product.started_at|date:'Y-m-d' }} 至 {{ product.expected_end_date|date:'Y-m-d' }}。
-                    请为各阶段指定负责人和起止时间，也可以先「稍后设置」，之后在项目详情里随时补填。
+                    各阶段的负责人必须填写；起止时间可以先「稍后设置」，之后在项目详情里随时补填。
                 </p>
                 <table class="setup-table">
                     <thead>
@@ -101,7 +101,7 @@
                             </td>
                             <td>
                                 <input type="text" class="form-input user-search setup-assignee"
-                                       list="users-datalist" autocomplete="off"
+                                       list="users-datalist" autocomplete="off" required
                                        data-hidden-target="setup-assignee-{{ stage.pk }}"
                                        placeholder="搜索阶段负责人..."
                                        value="{% if stage.assignee %}{{ stage.assignee.first_name|default:stage.assignee.username }}{% endif %}">
@@ -129,7 +129,7 @@
                 </table>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-outline btn-sm" onclick="closeSetupModal(event)">稍后设置</button>
+                <button type="button" class="btn btn-outline btn-sm" id="setup-defer-btn">稍后设置</button>
                 <button type="submit" class="btn btn-primary btn-sm">
                     <i class="bi bi-check-lg"></i> 保存并进入项目
                 </button>
@@ -145,7 +145,7 @@
 // 所有用户列表（供 JS 使用）
 const ALL_USERS = [{% for u in all_users %}{id:{{u.id}},name:"{{u.first_name|default:u.username|escapejs}}"}{% if not forloop.last %},{% endif %}{% endfor %}];
 </script>
-<script src="{% static 'js/app.js' %}?v=20261106-users"></script>
+<script src="{% static 'js/app.js' %}?v=20261109-pred"></script>
 {% if setup_mode %}
 <script>
 // 关闭「设置项目流程」窗口：只能通过「稍后设置」按钮退出（或直接保存）。
@@ -181,11 +181,66 @@ function closeSetupModal(event) {
     }
 
     form.querySelectorAll('.setup-assignee').forEach(function (input) {
-        input.addEventListener('input', function () { syncAssignee(input); });
-        syncAssignee(input);
+        // 没动过的输入框保留后端给的 id，不用姓名反查：有人同名时反查会取错人
+        input.addEventListener('input', function () {
+            input.dataset.dirty = '1';
+            syncAssignee(input);
+        });
     });
 
+    // 阶段负责人必填：「保存并进入项目」和「稍后设置」都要过这一关
+    function missingAssigneeRow() {
+        const rows = form.querySelectorAll('[data-setup-row]');
+        for (const row of rows) {
+            const input = row.querySelector('.setup-assignee');
+            if (input.dataset.dirty === '1') syncAssignee(input);
+            const hidden = document.getElementById(input.dataset.hiddenTarget);
+            if (!input.value.trim() || !hidden || !hidden.value) {
+                return row;
+            }
+        }
+        return null;
+    }
+
+    // 「稍后设置」：起止时间可以以后再补，但阶段负责人必须填完才能关窗口。
+    // 如果负责人被改过，直接按保存处理，免得用户白填一遍又不落库。
+    const deferBtn = document.getElementById('setup-defer-btn');
+    if (deferBtn) {
+        deferBtn.addEventListener('click', function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            const row = missingAssigneeRow();
+            if (row) {
+                const input = row.querySelector('.setup-assignee');
+                showToast(`「${row.dataset.stageName}」的阶段负责人还没填，请先选择负责人`, 'error');
+                if (input) input.focus();
+                return;
+            }
+            const changed = Array.prototype.some.call(
+                form.querySelectorAll('.setup-assignee'),
+                function (input) { return input.dataset.dirty === '1'; }
+            );
+            if (changed) {
+                if (typeof form.requestSubmit === 'function') {
+                    form.requestSubmit();
+                } else {
+                    form.submit();
+                }
+                return;
+            }
+            closeSetupModal();
+        });
+    }
+
     form.addEventListener('submit', function (event) {
+        const missing = missingAssigneeRow();
+        if (missing) {
+            event.preventDefault();
+            showToast(`「${missing.dataset.stageName}」的阶段负责人没填或不在人员列表里，请重新选择`, 'error');
+            const input = missing.querySelector('.setup-assignee');
+            if (input) input.focus();
+            return;
+        }
         const rows = form.querySelectorAll('[data-setup-row]');
         for (const row of rows) {
             const start = row.querySelector('.setup-start').value;

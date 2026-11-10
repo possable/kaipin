@@ -10,7 +10,7 @@ from django.contrib.auth.models import User
 from django.urls import reverse
 from django.utils import timezone
 from PIL import Image
-from accounts.models import Department
+from accounts.models import Department, TodoItem
 from activity_log.models import ActivityLog
 from templates_app.models import StageTemplate, TaskTemplate, ChecklistItemTemplate
 from .models import Product, ProductStage, Task
@@ -61,8 +61,7 @@ class ProductModelTest(TestCase):
         task_a = self.st1.task_templates.get(name='任务A')
         task_b = self.st1.task_templates.get(name='任务B')
         task_c = self.st2.task_templates.get(name='任务C')
-        task_c.depends_on = task_a  # 跨阶段前置
-        task_c.save(update_fields=['depends_on'])
+        task_c.depends_on.set([task_a])  # 跨阶段前置
 
         product = Product.objects.create(name='测试品', creator=self.user)
         product.create_stages_from_templates()
@@ -71,15 +70,36 @@ class ProductModelTest(TestCase):
         snap_b = product.stages.get(order=1).tasks.get(name='任务B')
         snap_c = product.stages.get(order=2).tasks.get(name='任务C')
 
-        self.assertEqual(snap_c.depends_on_id, snap_a.pk)
-        self.assertIsNone(snap_b.depends_on_id)
+        self.assertEqual(list(snap_c.depends_on.values_list('pk', flat=True)),
+                         [snap_a.pk])
+        self.assertFalse(snap_b.depends_on.exists())
         self.assertTrue(snap_c.is_blocked)
         self.assertFalse(snap_a.is_blocked)
         # 模板快照后改模板不影响已建项目
-        task_c.depends_on = task_b
-        task_c.save(update_fields=['depends_on'])
+        task_c.depends_on.set([task_b])
         snap_c.refresh_from_db()
-        self.assertEqual(snap_c.depends_on_id, snap_a.pk)
+        self.assertEqual(list(snap_c.depends_on.values_list('pk', flat=True)),
+                         [snap_a.pk])
+
+    def test_create_product_snapshots_multiple_task_predecessors(self):
+        """模板里勾了多个前置任务，新建项目里也原样带过来，并且未完成时锁住任务。"""
+        task_a = self.st1.task_templates.get(name='任务A')
+        task_b = self.st1.task_templates.get(name='任务B')
+        task_c = self.st2.task_templates.get(name='任务C')
+        task_c.depends_on.set([task_a, task_b])
+
+        product = Product.objects.create(name='多前置品', creator=self.user)
+        product.create_stages_from_templates()
+
+        snap_a = product.stages.get(order=1).tasks.get(name='任务A')
+        snap_b = product.stages.get(order=1).tasks.get(name='任务B')
+        snap_c = product.stages.get(order=2).tasks.get(name='任务C')
+
+        self.assertEqual(
+            set(snap_c.depends_on.values_list('pk', flat=True)),
+            {snap_a.pk, snap_b.pk},
+        )
+        self.assertTrue(snap_c.is_blocked)
 
     def test_create_product_snapshots_checklist_items(self):
         """子任务模板下的最小事项模板也会被快照到新品的 Task 上"""
@@ -99,6 +119,34 @@ class ProductModelTest(TestCase):
 
         other_task = product.stages.first().tasks.get(name='任务B')
         self.assertEqual(other_task.checklist_items.count(), 0)
+
+    def test_initiation_stage_tasks_default_to_stage_assignee(self):
+        """立项阶段（第一阶段）的子任务默认归阶段负责人，后续阶段不预设。"""
+        default_owner = User.objects.create_user(
+            username='default_owner', password='pass', first_name='模板默认负责人',
+        )
+        chosen_owner = User.objects.create_user(
+            username='chosen_owner', password='pass', first_name='新建时选的负责人',
+        )
+        self.st1.default_assignee = default_owner
+        self.st1.save()
+
+        product = Product.objects.create(name='立项默认负责人品', creator=self.user)
+        product.create_stages_from_templates({
+            self.st1.pk: {'assignee': chosen_owner},
+        })
+
+        initiation = product.stages.get(order=1)
+        self.assertEqual(initiation.assignee, chosen_owner)
+        self.assertEqual(
+            set(initiation.tasks.values_list('assignee_id', flat=True)),
+            {chosen_owner.pk},
+        )
+        # 后续阶段的子任务保持原样：不自动指定负责人
+        self.assertEqual(
+            set(product.stages.get(order=2).tasks.values_list('assignee_id', flat=True)),
+            {None},
+        )
 
 
 from django.test import Client
@@ -654,28 +702,83 @@ class ProductCreatePublishTest(TestCase):
         StageTemplate.objects.create(name='阶段2', order=2, department=self.dept)
         self.client.login(username='create-admin', password='pass')
 
-    def _post_create(self, name='新品'):
-        return self.client.post(reverse('product_create'), {
+    def _create_data(self, name='新品'):
+        data = {
             'name': name,
             'assignee': self.owner.pk,
             'started_at': timezone.localdate().isoformat(),
             'expected_end_date': (timezone.localdate() + timedelta(days=60)).isoformat(),
             'brand': '跨境自营',
             'category': '新品开发',
-        })
+        }
+        for tmpl in StageTemplate.objects.all():
+            data[f'stage_assignee_{tmpl.pk}'] = self.owner.pk
+        return data
+
+    def _post_create(self, name='新品'):
+        return self.client.post(reverse('product_create'), self._create_data(name))
 
     def test_new_product_is_published_immediately(self):
         response = self._post_create()
         product = Product.objects.get(name='新品')
 
         self.assertEqual(response.status_code, 302)
-        # 创建完直接进入「设置项目流程」窗口
-        self.assertIn('?setup=1', response.url)
+        # 创建成功后直接回看板，不再进详情页/弹设置窗口
+        self.assertEqual(response.url, reverse('kanban'))
         self.assertEqual(product.status, 'active')
         first_stage = product.stages.order_by('order').first()
         self.assertEqual(first_stage.status, 'in_progress')
         self.assertIsNotNone(first_stage.started_at)
         self.assertEqual(product.current_stage_order, 1)
+
+    def test_stage_setup_from_second_step_is_applied(self):
+        """第二步填的阶段负责人/时间要落到生成的阶段上。"""
+        data = self._create_data('分工落库')
+        stage2_tmpl = StageTemplate.objects.get(order=2)
+        data[f'stage_assignee_{stage2_tmpl.pk}'] = self.owner.pk
+        data[f'stage_expected_end_date_{stage2_tmpl.pk}'] = (
+            timezone.localdate() + timedelta(days=30)
+        ).isoformat()
+
+        self.client.post(reverse('product_create'), data)
+
+        stage2 = Product.objects.get(name='分工落库').stages.get(order=2)
+        self.assertEqual(stage2.assignee, self.owner)
+        self.assertEqual(
+            stage2.expected_end_date, timezone.localdate() + timedelta(days=30),
+        )
+
+    def test_missing_stage_assignee_blocks_creation(self):
+        """第二步漏填阶段负责人：提示并禁止创建项目。"""
+        data = self._create_data('漏填阶段负责人')
+        stage2_tmpl = StageTemplate.objects.get(order=2)
+        data[f'stage_assignee_{stage2_tmpl.pk}'] = ''
+
+        response = self.client.post(reverse('product_create'), data)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '负责人不能为空')
+        self.assertFalse(Product.objects.filter(name='漏填阶段负责人').exists())
+
+    @patch('products.views._notify_project_kickoff')
+    def test_repeated_submit_does_not_create_duplicate_products(self, mock_notify):
+        """网络慢时连续点「创建并发布」，同一份表单只应建出一个项目。"""
+        self._post_create('重复提交')
+        second = self._post_create('重复提交')
+
+        product = Product.objects.get(name='重复提交')
+        self.assertEqual(Product.objects.filter(name='重复提交').count(), 1)
+        self.assertEqual(second.url, reverse('kanban'))
+
+    def test_create_page_is_two_steps_and_requires_stage_owners(self):
+        """创建页第一步是「下一步」，第二步列出各阶段负责人（必填）。"""
+        body = self.client.get(reverse('product_create')).content.decode()
+
+        self.assertIn('下一步', body)
+        self.assertIn('上一步', body)
+        self.assertIn('stage_assignee_', body)
+        self.assertIn('阶段1', body)
+        self.assertIn('阶段2', body)
 
     def test_detail_page_shows_only_one_publish_button_for_legacy_draft(self):
         """草稿项目详情页上只能有一个「发布项目」按钮（详情页头 + 资料区块各放过一个）。"""
@@ -731,7 +834,7 @@ class ProjectKickoffNotificationTest(TestCase):
         self.client.login(username='kickoff-creator', password='pass')
 
     def _create(self, name='立项通知品'):
-        return self.client.post(reverse('product_create'), {
+        data = {
             'name': name,
             'assignee': self.owner.pk,
             'started_at': timezone.localdate().isoformat(),
@@ -740,7 +843,13 @@ class ProjectKickoffNotificationTest(TestCase):
             ).isoformat(),
             'brand': '跨境自营',
             'category': '新品开发',
-        })
+        }
+        # 第二步：每个阶段都要指定负责人（用模板默认的，没默认的给阶段负责人）
+        for tmpl in StageTemplate.objects.all():
+            data[f'stage_assignee_{tmpl.pk}'] = (
+                tmpl.default_assignee_id or self.stage_owner.pk
+            )
+        return self.client.post(reverse('product_create'), data)
 
     def _sent(self, mock_send):
         """{企微 userid: 消息正文}，便于按收件人断言。"""
@@ -755,18 +864,18 @@ class ProjectKickoffNotificationTest(TestCase):
 
         owner_text = sent['wx_owner']
         self.assertIn('张三你好，我是项目管理智能机器人。', owner_text)
-        self.assertIn('你负责的项目「立项通知品」已立项。', owner_text)
+        self.assertIn('你负责的项目“立项通知品”已立项。', owner_text)
         self.assertIn(
             f'开始时间：{timezone.localdate().isoformat()}　'
             f'预计结束：{(timezone.localdate() + timedelta(days=60)).isoformat()}',
             owner_text,
         )
-        self.assertIn('共 2 个阶段，首个阶段「立项」已开始。', owner_text)
+        self.assertIn('共 2 个阶段，首个阶段“立项”已开始。', owner_text)
         self.assertIn(f'点击查看：{settings.SITE_URL}', owner_text)
 
         stage_text = sent['wx_stage_owner']
         self.assertIn('李四你好，我是项目管理智能机器人。', stage_text)
-        self.assertIn('你被安排为「立项通知品」项目「包装设计」阶段的负责人。', stage_text)
+        self.assertIn('你被安排为“立项通知品”项目“包装设计”阶段的负责人。', stage_text)
         self.assertIn('阶段预计结束：待填写', stage_text)
         self.assertIn(f'点击查看：{settings.SITE_URL}', stage_text)
 
@@ -782,7 +891,7 @@ class ProjectKickoffNotificationTest(TestCase):
         sent = self._sent(mock_send)
         self.assertEqual(len(mock_send.call_args_list), 2)  # 项目负责人 + 阶段负责人
         stage_text = sent['wx_stage_owner']
-        self.assertIn('「包装设计」「打样」阶段的负责人', stage_text)
+        self.assertIn('“包装设计”“打样”阶段的负责人', stage_text)
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
     def test_stage_owner_without_wechat_is_skipped(self, mock_send):
@@ -820,9 +929,8 @@ class ProjectKickoffNotificationTest(TestCase):
 class ProductCreatePermissionTest(TestCase):
     """建项目的权限：管理员或「产品部」成员。
 
-    回归点：后端 can_create_product() 和左侧栏都认产品部，但看板右上角
-    的「新建项目」按钮只判断了 is_admin，产品部普通成员看得到侧边栏、
-    却看不到看板上的按钮。
+    新建入口统一在左侧导航「创建新品」：所有登录用户都能看见，
+    没有权限的人点击后由后端提示无权限。看板右上角不再单独放按钮。
     """
 
     def setUp(self):
@@ -841,12 +949,14 @@ class ProductCreatePermissionTest(TestCase):
         self.outsider.profile.department = self.other_dept
         self.outsider.profile.save()
 
-    def test_product_department_member_sees_the_kanban_button(self):
+    def test_product_department_member_sees_sidebar_create_entry(self):
         self.client.login(username='product-member', password='pass')
 
         response = self.client.get(reverse('kanban'))
 
-        self.assertContains(response, '新建项目')
+        # 新建入口只在左侧导航「创建新品」，看板右上角不再重复放按钮
+        self.assertContains(response, '创建新品')
+        self.assertNotContains(response, '新建项目')
 
     def test_product_department_member_can_open_the_create_page(self):
         self.client.login(username='product-member', password='pass')
@@ -855,12 +965,33 @@ class ProductCreatePermissionTest(TestCase):
 
         self.assertEqual(response.status_code, 200)
 
-    def test_other_department_member_sees_no_entry_and_is_denied(self):
+    def test_other_department_member_sees_entry_and_gets_no_permission_hint(self):
+        """入口对所有人可见，点了才提示无权限，而不是直接 403。"""
         self.client.login(username='create-outsider', password='pass')
 
-        self.assertNotContains(self.client.get(reverse('kanban')), '新建项目')
-        response = self.client.get(reverse('product_create'))
-        self.assertEqual(response.status_code, 403)
+        kanban = self.client.get(reverse('kanban'))
+        self.assertContains(kanban, '创建新品')
+        self.assertNotContains(kanban, '新建项目')
+
+        response = self.client.get(reverse('product_create'), follow=True)
+        self.assertRedirects(response, reverse('kanban'))
+        self.assertContains(response, '你没有新建项目的权限')
+
+    def test_outsider_cannot_create_project_even_by_posting(self):
+        """页面提示之外，后端仍然拦住建项目的 POST。"""
+        self.client.login(username='create-outsider', password='pass')
+        before = Product.objects.count()
+
+        response = self.client.post(
+            reverse('product_create'),
+            {'name': '偷偷建的项目', 'assignee': self.outsider.pk},
+            follow=True,
+        )
+
+        self.assertRedirects(response, reverse('kanban'))
+        self.assertContains(response, '你没有新建项目的权限')
+        self.assertEqual(Product.objects.count(), before)
+        self.assertFalse(Product.objects.filter(name='偷偷建的项目').exists())
 
     def test_assignee_picker_only_lists_active_users(self):
         """人员选择只显示在职员工，离职员工不出现在下拉候选里。"""
@@ -921,7 +1052,7 @@ class ProductSetupStagesTest(TestCase):
             f'expected_end_date_{self.stage1.pk}': (
                 self.today + timedelta(days=10)
             ).isoformat(),
-            f'assignee_{self.stage2.pk}': '',
+            f'assignee_{self.stage2.pk}': str(self.outsider.pk),
             f'started_at_{self.stage2.pk}': '',
             f'expected_end_date_{self.stage2.pk}': '',
         }
@@ -959,6 +1090,19 @@ class ProductSetupStagesTest(TestCase):
         self.assertEqual(self.stage1.assignee_id, self.owner.pk)
         self.assertEqual(timezone.localtime(self.stage1.started_at).date(), self.today)
         self.assertEqual(self.stage1.expected_end_date, self.today + timedelta(days=10))
+
+    def test_blank_stage_assignee_is_rejected(self):
+        """设置流程时也不允许把阶段负责人清空。"""
+        self.client.login(username='setup-creator', password='pass')
+
+        response = self._post(**{f'assignee_{self.stage2.pk}': ''})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('?setup=1', response.url)
+        self.stage1.refresh_from_db()
+        self.assertIsNone(self.stage1.assignee_id)
+        self.stage2.refresh_from_db()
+        self.assertIsNone(self.stage2.assignee_id)
 
     def test_start_after_end_is_rejected(self):
         self.client.login(username='setup-creator', password='pass')
@@ -1073,6 +1217,202 @@ class ProductPauseResumeTest(TestCase):
         self.assertIsNotNone(self.product.actual_end_date)
 
 
+class ProductAutoTodoTest(TestCase):
+    """暂停/取消的项目不该在待办里占位，恢复后要按当前负责人重建。"""
+
+    def setUp(self):
+        self.dept = Department.objects.create(name='待办部')
+        self.admin = User.objects.create_user(username='todo-admin', password='pass')
+        self.admin.profile.role = 'admin'
+        self.admin.profile.department = self.dept
+        self.admin.profile.save()
+        self.owner = User.objects.create_user(username='todo-owner', password='pass')
+        self.owner.profile.department = self.dept
+        self.owner.profile.save()
+        self.stage_owner = User.objects.create_user(username='todo-stage', password='pass')
+        self.stage_owner.profile.department = self.dept
+        self.stage_owner.profile.save()
+        self.executor = User.objects.create_user(username='todo-exec', password='pass')
+        self.executor.profile.department = self.dept
+        self.executor.profile.save()
+
+        self.product = Product.objects.create(
+            name='待办品', creator=self.admin, assignee=self.owner, status='active',
+        )
+        self.stage = ProductStage.objects.create(
+            product=self.product, name='阶段1', order=1, department=self.dept,
+            assignee=self.stage_owner, status='in_progress',
+        )
+        self.task = Task.objects.create(
+            product_stage=self.stage, name='任务1', order=1, assignee=self.executor,
+        )
+        self.product.sync_all_auto_todos()
+
+    def _auto_todo_users(self):
+        return set(
+            TodoItem.objects.filter(is_auto=True).values_list('user_id', flat=True)
+        )
+
+    def test_sync_creates_one_todo_per_level(self):
+        self.assertEqual(TodoItem.objects.filter(is_auto=True).count(), 3)
+        self.assertEqual(
+            self._auto_todo_users(),
+            {self.owner.pk, self.stage_owner.pk, self.executor.pk},
+        )
+
+    def test_pause_removes_all_auto_todos(self):
+        self.client.login(username='todo-owner', password='pass')
+
+        response = self.client.post(reverse('product_pause', args=[self.product.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(TodoItem.objects.filter(is_auto=True).exists())
+
+    def test_resume_recreates_auto_todos(self):
+        self.product.pause()
+        self.assertFalse(TodoItem.objects.filter(is_auto=True).exists())
+
+        self.product.resume()
+
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.status, 'active')
+        self.assertEqual(TodoItem.objects.filter(is_auto=True).count(), 3)
+        self.assertEqual(
+            self._auto_todo_users(),
+            {self.owner.pk, self.stage_owner.pk, self.executor.pk},
+        )
+
+    def test_cancel_removes_all_auto_todos(self):
+        self.client.login(username='todo-admin', password='pass')
+
+        response = self.client.post(reverse('product_cancel', args=[self.product.pk]))
+
+        self.assertEqual(response.status_code, 302)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.status, 'cancelled')
+        self.assertFalse(TodoItem.objects.filter(is_auto=True).exists())
+
+    def test_sync_does_not_touch_manual_todos(self):
+        manual = TodoItem.objects.create(user=self.owner, content='自己加的待办')
+
+        self.product.pause()
+
+        self.assertTrue(TodoItem.objects.filter(pk=manual.pk).exists())
+        self.assertFalse(TodoItem.objects.filter(is_auto=True).exists())
+
+    def test_sync_while_paused_does_not_recreate(self):
+        """暂停期间改了负责人/时间，同步也不会把待办又建回来。"""
+        self.product.pause()
+        self.task.assignee = self.stage_owner
+        self.task.save(update_fields=['assignee'])
+
+        self.task.sync_auto_todo()
+        self.stage.sync_auto_todo()
+        self.product.sync_auto_todo()
+
+        self.assertFalse(TodoItem.objects.filter(is_auto=True).exists())
+
+
+class TaskAssigneePermissionTest(TestCase):
+    """任务执行人不能改自己的负责人；管理员/品负责人/阶段负责人可以。"""
+
+    def setUp(self):
+        self.dept = Department.objects.create(name='执行部')
+        self.admin = User.objects.create_user(username='asg-admin', password='pass')
+        self.admin.profile.role = 'admin'
+        self.admin.profile.department = self.dept
+        self.admin.profile.save()
+        self.product_owner = User.objects.create_user(
+            username='asg-po', password='pass', first_name='品负责人',
+        )
+        self.product_owner.profile.department = self.dept
+        self.product_owner.profile.save()
+        self.stage_owner = User.objects.create_user(
+            username='asg-so', password='pass', first_name='阶段负责人',
+        )
+        self.stage_owner.profile.department = self.dept
+        self.stage_owner.profile.save()
+        self.executor = User.objects.create_user(
+            username='asg-exec', password='pass', first_name='执行人',
+        )
+        self.executor.profile.department = self.dept
+        self.executor.profile.save()
+        self.other = User.objects.create_user(
+            username='asg-other', password='pass', first_name='其他人',
+        )
+        self.other.profile.department = self.dept
+        self.other.profile.save()
+
+        self.product = Product.objects.create(
+            name='执行人权限品', creator=self.admin,
+            assignee=self.product_owner, status='active',
+        )
+        self.stage = ProductStage.objects.create(
+            product=self.product, name='执行阶段', order=1,
+            department=self.dept, assignee=self.stage_owner,
+            status='in_progress', started_at=timezone.now(),
+        )
+        self.task = Task.objects.create(
+            product_stage=self.stage, name='执行任务', order=1,
+            assignee=self.executor, status='in_progress',
+            started_at=timezone.now(),
+            expected_end_date=timezone.localdate() + timedelta(days=7),
+        )
+
+    def _set_assignee(self, user, assignee):
+        self.client.login(username=user.username, password='pass')
+        return self.client.post(
+            reverse('task_update_field', args=[self.task.pk]),
+            {'field': 'assignee', 'value': assignee.pk if assignee else ''},
+        )
+
+    def test_executor_cannot_change_own_assignee(self):
+        response = self._set_assignee(self.executor, self.other)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn('执行人', response.json()['error'])
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.assignee_id, self.executor.pk)
+
+    def test_executor_cannot_clear_own_assignee(self):
+        response = self._set_assignee(self.executor, None)
+
+        self.assertEqual(response.status_code, 403)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.assignee_id, self.executor.pk)
+
+    def test_stage_owner_product_owner_and_admin_can_change_assignee(self):
+        for user in (self.stage_owner, self.product_owner, self.admin):
+            with self.subTest(user=user.username):
+                self.task.assignee = self.executor
+                self.task.save(update_fields=['assignee'])
+
+                response = self._set_assignee(user, self.other)
+
+                self.assertEqual(response.status_code, 200)
+                self.task.refresh_from_db()
+                self.assertEqual(self.task.assignee_id, self.other.pk)
+
+    def test_executor_sees_assignee_as_readonly_text(self):
+        self.client.login(username='asg-exec', password='pass')
+
+        body = self.client.get(
+            reverse('stage_detail_modal', args=[self.stage.pk]),
+        ).content.decode()
+
+        self.assertNotIn('data-field="assignee"', body)
+        self.assertIn('执行人', body)
+
+    def test_stage_owner_sees_editable_assignee(self):
+        self.client.login(username='asg-so', password='pass')
+
+        body = self.client.get(
+            reverse('stage_detail_modal', args=[self.stage.pk]),
+        ).content.decode()
+
+        self.assertIn('data-field="assignee"', body)
+
+
 class TaskPredecessorTest(TestCase):
     """前置任务：未完成时锁定开始，完成后自动排期并通知三方。"""
 
@@ -1144,8 +1484,7 @@ class TaskPredecessorTest(TestCase):
         self.assertEqual(self.dependent.status, 'pending')
 
     def test_blocked_task_cannot_be_marked_completed(self):
-        self.dependent.depends_on = self.predecessor
-        self.dependent.save(update_fields=['depends_on'])
+        self.dependent.depends_on.set([self.predecessor])
 
         self.client.login(username='pred-executor', password='pass')
         response = self.client.post(
@@ -1157,8 +1496,7 @@ class TaskPredecessorTest(TestCase):
         self.assertEqual(self.dependent.status, 'pending')
 
     def test_cycle_is_rejected(self):
-        self.dependent.depends_on = self.predecessor
-        self.dependent.save(update_fields=['depends_on'])
+        self.dependent.depends_on.set([self.predecessor])
 
         self.client.login(username='pred-stage', password='pass')
         response = self.client.post(
@@ -1169,7 +1507,7 @@ class TaskPredecessorTest(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn('不能设为前置任务', response.json()['error'])
         self.predecessor.refresh_from_db()
-        self.assertIsNone(self.predecessor.depends_on_id)
+        self.assertFalse(self.predecessor.depends_on.exists())
 
     def test_predecessor_can_come_from_another_stage(self):
         self.client.login(username='pred-stage', password='pass')
@@ -1180,13 +1518,15 @@ class TaskPredecessorTest(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.dependent.refresh_from_db()
-        self.assertEqual(self.dependent.depends_on_id, self.foreign_task.pk)
+        self.assertEqual(
+            list(self.dependent.depends_on.values_list('pk', flat=True)),
+            [self.foreign_task.pk],
+        )
         self.assertTrue(self.dependent.is_blocked)
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
     def test_cross_stage_predecessor_completion_starts_dependent(self, mock_send):
-        self.dependent.depends_on = self.foreign_task
-        self.dependent.save(update_fields=['depends_on'])
+        self.dependent.depends_on.set([self.foreign_task])
 
         self.foreign_task.mark_completed()
 
@@ -1200,8 +1540,7 @@ class TaskPredecessorTest(TestCase):
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
     def test_completing_predecessor_starts_dependent_and_notifies(self, mock_send):
-        self.dependent.depends_on = self.predecessor
-        self.dependent.save(update_fields=['depends_on'])
+        self.dependent.depends_on.set([self.predecessor])
 
         self.predecessor.mark_completed()
 
@@ -1221,8 +1560,10 @@ class TaskPredecessorTest(TestCase):
             self.assertIn(userid, called_userids)
         contents = [call.args[1] for call in mock_send.call_args_list]
         self.assertTrue(any(
-            '前置任务「完成设计稿」已完成' in content
-            and '开始打样' in content
+            '“前置任务项目”·“设计阶段”子任务“开始打样”的前置任务'
+            '“完成设计稿”已完成。' in content
+            and '“开始打样”已自动开始' in content
+            and '请您合理安排工作，把控进度，保证项目顺利完成。' in content
             for content in contents
         ))
 
@@ -1231,8 +1572,8 @@ class TaskPredecessorTest(TestCase):
         """没有执行人/负责人也要自动排期，只是没人可通知。"""
         task = Task.objects.create(
             product_stage=self.stage, name='无负责人任务', order=3,
-            depends_on=self.predecessor,
         )
+        task.depends_on.set([self.predecessor])
 
         self.predecessor.mark_completed()
 
@@ -1240,9 +1581,75 @@ class TaskPredecessorTest(TestCase):
         self.assertIsNotNone(task.started_at)
         self.assertIsNotNone(task.expected_end_date)
 
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_multiple_predecessors_must_all_complete_before_start(self, mock_send):
+        """两个前置任务：只完成一个不解锁，全部完成才自动开始。"""
+        second = Task.objects.create(
+            product_stage=self.other_stage, name='确认包装', order=2,
+            assignee=self.executor,
+        )
+        self.dependent.depends_on.set([self.predecessor, second])
+
+        self.predecessor.mark_completed()
+        self.dependent.refresh_from_db()
+        self.assertIsNone(self.dependent.started_at)
+        self.assertTrue(self.dependent.is_blocked)
+        self.assertEqual(self.dependent.blocking_predecessor_name, '确认包装')
+
+        second.mark_completed()
+        self.dependent.refresh_from_db()
+        self.assertIsNotNone(self.dependent.started_at)
+        self.assertFalse(self.dependent.is_blocked)
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_start_time_follows_latest_finishing_predecessor(self, mock_send):
+        """开始时间以结束最晚的前置任务为准，而不是随便某个前置任务。"""
+        earlier = Task.objects.create(
+            product_stage=self.other_stage, name='早完成的任务', order=2,
+        )
+        earlier.status = 'completed'
+        earlier.actual_end_date = timezone.now() - timedelta(days=5)
+        earlier.save(update_fields=['status', 'actual_end_date'])
+        self.dependent.depends_on.set([earlier, self.predecessor])
+
+        self.predecessor.mark_completed()
+
+        self.dependent.refresh_from_db()
+        self.assertEqual(
+            self.dependent.started_at, self.predecessor.actual_end_date,
+        )
+        self.assertEqual(
+            self.dependent.expected_end_date,
+            timezone.localtime(self.predecessor.actual_end_date).date()
+            + timedelta(days=7),
+        )
+
+    def test_can_set_and_clear_multiple_predecessors_via_api(self):
+        second = Task.objects.create(
+            product_stage=self.other_stage, name='确认包装', order=2,
+        )
+        self.client.login(username='pred-stage', password='pass')
+
+        response = self.client.post(
+            reverse('task_update_field', args=[self.dependent.pk]),
+            {'field': 'predecessor',
+             'value': f'{self.predecessor.pk},{second.pk}'},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            set(self.dependent.depends_on.values_list('pk', flat=True)),
+            {self.predecessor.pk, second.pk},
+        )
+
+        response = self.client.post(
+            reverse('task_update_field', args=[self.dependent.pk]),
+            {'field': 'predecessor', 'value': ''},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(self.dependent.depends_on.exists())
+
     def test_stage_detail_renders_predecessor_column_and_lock(self):
-        self.dependent.depends_on = self.predecessor
-        self.dependent.save(update_fields=['depends_on'])
+        self.dependent.depends_on.set([self.predecessor])
 
         self.client.login(username='pred-stage', password='pass')
         response = self.client.get(
@@ -1251,9 +1658,12 @@ class TaskPredecessorTest(TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.content.decode()
-        self.assertIn('data-field="predecessor"', body)
+        # 下拉按钮 + 复选框多选菜单
+        self.assertIn('class="pred-dropdown"', body)
+        self.assertIn('class="pred-menu"', body)
+        self.assertIn('type="checkbox"', body)
         self.assertIn('待前置完成', body)
         self.assertIn('完成设计稿', body)
         # 跨阶段候选按阶段分组显示
-        self.assertIn('<optgroup label="包装阶段">', body)
+        self.assertIn('class="pred-group">包装阶段', body)
         self.assertIn('其他阶段任务', body)

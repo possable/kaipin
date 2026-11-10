@@ -1,0 +1,17 @@
+# 到期前提醒扫描：只发子任务/阶段/品的临近提醒。
+# 由 kaipin-remind-upcoming.timer 在工作日 14:30 触发。
+# 放到 /etc/systemd/system/kaipin-remind-upcoming.service
+
+[Unit]
+Description=Kaipin 到期前提醒扫描
+After=network.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/kaipin
+EnvironmentFile=/opt/kaipin/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/kaipin/venv311/bin/python manage.py scan_reminders --mode advance

@@ -277,8 +277,8 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
     display: inline-block; flex-shrink: 0;
 }
 .legend-dot.color-gray { background: #6b7280; }
-/* color-white 是「进行中」的语义值（compute_task_color 仍在用 white），配色改成蓝色 */
-.legend-dot.color-white { background: #3d9bff; box-shadow: 0 0 4px rgba(61,155,255,.45); }
+/* color-white 是「进行中」的语义值（compute_task_color 仍在用 white），显示为白色 */
+.legend-dot.color-white { background: #ffffff; box-shadow: 0 0 4px rgba(255,255,255,.60); }
 .legend-dot.color-red { background: var(--red); }
 .legend-dot.color-green { background: var(--green); }
 .legend-dot.color-yellow { background: #f5c542; }
@@ -293,9 +293,10 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
 }
 .stage-line-fill {
     position: absolute; left: 0; top: 0; height: 100%;
-    background: var(--green); transition: width 0.3s;
+    background: #ffffff; transition: width 0.3s;
 }
-.stage-line-fill.is-overdue { background: var(--red); }
+/* 超期项目进度条同样用白色，超期信息由阶段圆点/状态标签表达 */
+.stage-line-fill.is-overdue { background: #ffffff; }
 .stage-points {
     position: absolute; left: 0; right: 0; top: 6px;
     display: flex; justify-content: space-between;
@@ -318,7 +319,7 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
 .stage-pt.orange { background: var(--orange); border-color: var(--orange); box-shadow: 0 0 6px rgba(255,154,0,.28); }
 /* 五色状态规则：未开始灰/进行中白/已完成绿/已超期红/已超期但完成黄 */
 .stage-pt.color-gray { background: #6b7280; border-color: #6b7280; }
-.stage-pt.color-white { background: #3d9bff; border-color: #3d9bff; box-shadow: 0 0 6px rgba(61,155,255,.45); }
+.stage-pt.color-white { background: #ffffff; border-color: #ffffff; box-shadow: 0 0 6px rgba(255,255,255,.60); }
 .stage-pt.color-green { background: var(--green); border-color: var(--green); box-shadow: 0 0 7px rgba(0,232,119,.36); }
 .stage-pt.color-red { background: var(--red); border-color: var(--red); box-shadow: 0 0 6px rgba(255,61,67,.28); }
 .stage-pt.color-yellow { background: #f5c542; border-color: #f5c542; box-shadow: 0 0 6px rgba(245,197,66,.36); }
@@ -343,7 +344,8 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
 .status-badge.progress { color: var(--green); background: rgba(0,102,54,.31); }
 .status-badge.overdue { color: #e7d7d7; background: rgba(93,31,32,.42); }
 .status-badge.pending { color: #c3c8cb; background: rgba(70,80,86,.23); }
-.status-badge.paused { color: #c3c8cb; background: rgba(70,80,86,.23); }
+/* 已暂停：黄色，避免和「未开始」的灰色混淆 */
+.status-badge.paused { color: #f5c542; background: rgba(120,95,20,.30); }
 .status-badge.in_progress { color: var(--orange); background: rgba(100,61,0,.25); }
 .status-badge.completed { color: var(--green); background: rgba(0,102,54,.31); }
 .status-badge.is-clickable { border: none; cursor: pointer; font-family: inherit; }
@@ -3207,6 +3209,62 @@ input[type="date"].form-input::-webkit-calendar-picker-indicator {
     color: var(--muted);
     font-size: 12px;
 }
+
+/* 前置任务多选下拉（static/js/app.js 渲染，菜单 fixed 挂在按钮下方） */
+.pred-dropdown { position: relative; }
+.pred-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+    max-width: 150px;
+    padding: 3px 5px;
+    background: #06131d;
+    border: 1px solid var(--line2);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-size: 11px;
+    text-align: left;
+    cursor: pointer;
+}
+.pred-toggle .pred-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.pred-toggle i { flex: none; font-size: 9px; color: var(--muted); }
+.pred-dropdown.is-dirty .pred-toggle { border-color: rgba(0, 232, 119, .5); }
+.pred-menu {
+    position: fixed;
+    z-index: 4000;
+    min-width: 220px;
+    max-width: 320px;
+    max-height: 260px;
+    overflow-y: auto;
+    padding: 4px;
+    background: #06131d;
+    border: 1px solid rgba(141, 164, 178, .28);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .5);
+}
+.pred-menu[hidden] { display: none; }
+.pred-group { padding: 6px 10px 3px; color: var(--muted); font-size: 11px; }
+.pred-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 4px;
+    color: #c4ccd0;
+    font-size: 12px;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.pred-option:hover { background: rgba(0, 232, 119, .12); color: #77ffd0; }
+.pred-option input { margin: 0; accent-color: #00e877; cursor: pointer; }
+.pred-empty { padding: 7px 10px; color: var(--muted); font-size: 12px; }
 
 /* 新建项目后的「设置项目流程」窗口 */
 .setup-modal-box {

@@ -44,13 +44,23 @@ def _upcoming_task_recipients(task):
     return result
 
 
-def scan_and_remind():
+def scan_and_remind(mode='all'):
     """
     扫描所有进行中品下的未完成任务：
     - 截止日期在3天内 → 临近提醒
     - 截止日期已过 → 超期提醒 + 标记延期
     每个 Task 每种类型每天只发一次。
+
+    mode 用来把两类提醒拆到不同时间发：
+    - 'advance'：只发到期前提醒（子任务、阶段、品的 D-3~D-1），工作日 14:30
+    - 'other'：只发超期提醒、信息缺失提醒和超期汇总，每日 09:00
+    - 'all'：全部（手动执行 / 测试）
     """
+    if mode not in ('all', 'advance', 'other'):
+        raise ValueError(f'未知的提醒扫描模式: {mode}')
+    do_advance = mode in ('all', 'advance')
+    do_other = mode in ('all', 'other')
+
     today = timezone.localtime(timezone.now()).date()
     # 本地时区的今日起止，Django 会在查询时自动转为 UTC，避免依赖 MySQL CONVERT_TZ
     today_start = timezone.localtime(timezone.now()).replace(
@@ -70,13 +80,15 @@ def scan_and_remind():
         'product_stage__product__assignee',
         'product_stage__assignee',
         'assignee__profile',
-        'depends_on',
-    )
+    ).prefetch_related('depends_on')
 
     sent_count = 0
     # 到期前提醒先按「人」收集，扫描末尾同一个人只发一条
     upcoming_items = []
     upcoming_task_recipients = {}
+    # 超期提醒也按执行人收集：一个人名下多件超期任务合并成一条，
+    # 不再一件一条轰炸；任务级 ReminderLog 仍然逐件写，保住按天的去重
+    overdue_groups = {}
     for task in tasks:
         # 先根据时间自动更新状态
         task.update_status()
@@ -114,38 +126,24 @@ def scan_and_remind():
         end_date_str = end_date.strftime('%Y-%m-%d')
 
         if reminder_type == 'overdue':
-            # 超期单任务只发执行人；阶段/品负责人由后面的每日超期汇总覆盖
+            if not do_other:
+                continue
+            # 超期只发执行人；阶段/品负责人由后面的每日超期汇总覆盖。
+            # 这里先按执行人收集，循环结束后每人合并成一条。
             if not task.assignee:
                 continue
-            receiver_name = task.assignee.first_name or task.assignee.username
-            situation = (
-                f'你负责的「{product_name}」项目，在「{stage_name}」阶段的'
-                f'「{task.name}」事项，预计 {end_date_str} 完成，'
-                f'但已超期 {abs(days_left)} 天，请尽快处理！'
-            )
-            content = (
-                f'{receiver_name}你好，我是项目管理智能机器人。\n'
-                f'{situation}\n'
-                f'点击查看：{settings.SITE_URL}'
-            )
-            try:
-                success = send_message_to_user(task.assignee, content)
-            except Exception:
-                logger.exception('超期提醒发送异常: task=%s', task.pk)
-                success = False
-            if success:
-                ReminderLog.objects.create(task=task, reminder_type=reminder_type)
-                task.mark_overdue()
-                sent_count += 1
-                log_action(None, '系统提醒', 'task', task.id,
-                           f'致 {receiver_name} · {task.name}', '超期提醒')
-                logger.info('超期提醒已发送: %s -> %s', task.name, task.assignee.username)
+            overdue_groups.setdefault(
+                task.assignee_id, (task.assignee, []),
+            )[1].append((task, product_name, stage_name, end_date_str, days_left))
+            continue
+
+        if not do_advance:
             continue
 
         # 到期前：执行人 + 阶段负责人 + 品负责人（向上两级）。
         # 这里只收集，末尾统一发送；同一个人当天多条会合并成一条。
         line = (
-            f'「{product_name}」·「{stage_name}」·「{task.name}」子任务：'
+            f'“{product_name}”·“{stage_name}”·“{task.name}”子任务：'
             f'预计 {end_date_str} 完成，距离截止还有 {days_left} 天。'
         )
         for recipient, _role in _upcoming_task_recipients(task):
@@ -159,19 +157,73 @@ def scan_and_remind():
             })
             upcoming_task_recipients.setdefault(task.id, set()).add(recipient.id)
 
+    # ---- 执行人超期提醒：同一人当天多件任务合并成一条 ----
+    # 合并只在「本人名下有 2 件及以上」时生效；只有一件时保留原来的单条措辞。
+    for assignee, items in overdue_groups.values():
+        receiver_name = assignee.first_name or assignee.username
+        if len(items) == 1:
+            task, product_name, stage_name, end_date_str, days_left = items[0]
+            situation = (
+                f'你负责的“{product_name}”项目，在“{stage_name}”阶段的'
+                f'“{task.name}”事项，预计 {end_date_str} 完成，'
+                f'但已超期 {abs(days_left)} 天，请尽快处理！'
+            )
+        else:
+            lines = [
+                f'{idx}. “{product_name}”·“{stage_name}”·“{task.name}”：'
+                f'预计 {end_date_str} 完成，已超期 {abs(days_left)} 天'
+                for idx, (task, product_name, stage_name, end_date_str, days_left)
+                in enumerate(items, 1)
+            ]
+            situation = (
+                f'你有 {len(items)} 个事项已超期，请尽快处理：\n'
+                + '\n'.join(lines)
+            )
+
+        content = (
+            '您好，我是项目管理智能机器人。\n'
+            f'{situation}\n'
+            f'点击查看：{settings.SITE_URL}'
+        )
+        try:
+            success = send_message_to_user(assignee, content)
+        except Exception:
+            logger.exception('超期提醒发送异常: assignee=%s', assignee.username)
+            success = False
+        if not success:
+            continue
+
+        for task, product_name, stage_name, end_date_str, days_left in items:
+            ReminderLog.objects.create(task=task, reminder_type='overdue')
+            task.mark_overdue()
+            sent_count += 1
+            log_action(None, '系统提醒', 'task', task.id,
+                       f'致 {receiver_name} · {task.name}', '超期提醒')
+        logger.info(
+            '超期提醒已发送: %s 件任务 -> %s', len(items), assignee.username,
+        )
+
     # ---- 子任务必填信息缺失：每天提醒阶段负责人，直到补齐 ----
     # 只管进行中阶段里的未完成任务：后续阶段的字段还没到填的时候，
     # 天天催只会变成噪音；完成后也不再催。
-    incomplete_tasks = Task.objects.filter(
-        product_stage__product__status='active',
-        product_stage__status='in_progress',
-    ).exclude(status='completed').filter(
-        Q(assignee__isnull=True)
-        | Q(started_at__isnull=True)
-        | Q(expected_end_date__isnull=True)
-    ).select_related(
-        'product_stage__product', 'product_stage__assignee', 'depends_on',
-    ).order_by('product_stage__order', 'order', 'id')
+    # 阶段还没到开始时间也不催：阶段没开始，执行人/时间本来就不该现在填。
+    incomplete_tasks = Task.objects.none()
+    if do_other:
+        incomplete_tasks = Task.objects.filter(
+            product_stage__product__status='active',
+            product_stage__status='in_progress',
+            product_stage__started_at__isnull=False,
+            product_stage__started_at__lte=timezone.now(),
+        ).exclude(status='completed').exclude(
+            # 立项阶段不再强制要求填执行人/开始/结束时间，也不再发信息缺失提醒
+            product_stage__name='立项',
+        ).filter(
+            Q(assignee__isnull=True)
+            | Q(started_at__isnull=True)
+            | Q(expected_end_date__isnull=True)
+        ).select_related(
+            'product_stage__product', 'product_stage__assignee',
+        ).prefetch_related('depends_on').order_by('product_stage__order', 'order', 'id')
 
     stage_tasks = {}
     stage_map = {}
@@ -209,13 +261,16 @@ def scan_and_remind():
 
     # ---- 阶段/品到期前提醒（D-3 ~ D-1）：向上两级，按天去重 ----
     due_stages = []
-    for stage in ProductStage.objects.filter(
-        product__status='active',
-        expected_end_date__gte=due_window_start,
-        expected_end_date__lte=due_window_end,
-    ).exclude(status='completed').select_related(
-        'product__assignee', 'assignee',
-    ):
+    stage_due_query = ProductStage.objects.none()
+    if do_advance:
+        stage_due_query = ProductStage.objects.filter(
+            product__status='active',
+            expected_end_date__gte=due_window_start,
+            expected_end_date__lte=due_window_end,
+        ).exclude(status='completed').select_related(
+            'product__assignee', 'assignee',
+        )
+    for stage in stage_due_query:
         already_sent = UpwardNotifyLog.objects.filter(
             content_type_label='stage', object_id=stage.pk,
             event_type='upcoming', sent_date=today,
@@ -238,11 +293,14 @@ def scan_and_remind():
             logger.exception('阶段到期前通知收集失败')
 
     due_products = []
-    for product in Product.objects.filter(
-        status='active',
-        expected_end_date__gte=due_window_start,
-        expected_end_date__lte=due_window_end,
-    ).select_related('assignee'):
+    product_due_query = Product.objects.none()
+    if do_advance:
+        product_due_query = Product.objects.filter(
+            status='active',
+            expected_end_date__gte=due_window_start,
+            expected_end_date__lte=due_window_end,
+        ).select_related('assignee')
+    for product in product_due_query:
         already_sent = UpwardNotifyLog.objects.filter(
             content_type_label='product', object_id=product.pk,
             event_type='upcoming', sent_date=today,
@@ -265,7 +323,7 @@ def scan_and_remind():
             logger.exception('项目到期前通知收集失败')
 
     # ---- 到期前提醒统一发送：同一个人多条合并成一条 ----
-    if upcoming_items:
+    if do_advance and upcoming_items:
         try:
             sent_recipients = send_upcoming_aggregate(upcoming_items)
         except Exception:
@@ -289,11 +347,14 @@ def scan_and_remind():
     # 同样是先收集再按负责人聚合发送。品总负责人往往同时管好几个品、
     # 每个品又可能有好几个阶段超期，逐条发就是一天七八条几乎一样的消息。
     newly_overdue_stages = []
-    for stage in ProductStage.objects.exclude(
-        status='completed'
-    ).exclude(product__status='paused').select_related(
-        'product', 'assignee'
-    ):
+    stage_overdue_query = ProductStage.objects.none()
+    if do_other:
+        stage_overdue_query = ProductStage.objects.exclude(
+            status='completed'
+        ).exclude(product__status='paused').select_related(
+            'product', 'assignee'
+        )
+    for stage in stage_overdue_query:
         has_overdue_task = stage.tasks.filter(status='overdue').exists()
         if not has_overdue_task:
             continue
@@ -332,7 +393,12 @@ def scan_and_remind():
     # UpwardNotifyLog 仍然**逐品**写：它是按 (label, object_id, event_type, date) 去重的，
     # 逐品写才能保证「今天已经通知过的品」明天不会再被算进来。
     newly_overdue = []
-    for product in Product.objects.exclude(status__in=['completed', 'cancelled', 'paused']):
+    product_overdue_query = Product.objects.none()
+    if do_other:
+        product_overdue_query = Product.objects.exclude(
+            status__in=['completed', 'cancelled', 'paused']
+        )
+    for product in product_overdue_query:
         has_overdue_stage = product.stages.exclude(status='completed').filter(
             tasks__status='overdue'
         ).exists()

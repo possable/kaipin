@@ -1,5 +1,5 @@
 import logging
-from datetime import timedelta
+from datetime import time, timedelta
 
 from django.db import models
 from django.db.models import Q
@@ -9,6 +9,21 @@ from accounts.models import Department
 from templates_app.models import StageTemplate
 
 logger = logging.getLogger(__name__)
+
+
+def _cached_auto_todo(obj):
+    """取 obj.auto_todo；实例上缓存着已删除对象（pk=None）时当作没有。
+
+    Django 的反向一对一关系会把对象缓存在 _state.fields_cache 里，delete()
+    之后缓存仍然指向那个 pk 已被清空的对象。项目暂停清空待办后如果再用
+    同一个实例同步，就会拿着这个幽灵对象去 delete/save 而报错，所以这里
+    顺手把失效缓存清掉。
+    """
+    todo = getattr(obj, 'auto_todo', None)
+    if todo is not None and todo.pk is None:
+        obj._state.fields_cache.pop('auto_todo', None)
+        return None
+    return todo
 
 
 def compute_task_status(task, today=None):
@@ -154,30 +169,46 @@ class Product(models.Model):
             return False
         return current.tasks.filter(status='overdue').exists()
 
-    def create_stages_from_templates(self):
-        """从当前 StageTemplate 快照生成 ProductStage 和 Task。非草稿时自动激活第一阶段。"""
+    def create_stages_from_templates(self, stage_setup=None):
+        """从当前 StageTemplate 快照生成 ProductStage 和 Task。非草稿时自动激活第一阶段。
+
+        stage_setup: {StageTemplate.pk: {'assignee': User, 'started_at': datetime,
+        'expected_end_date': date}}，新建项目第二步填的各阶段分工；没给的阶段
+        仍用模板里的默认负责人。
+        """
+        stage_setup = stage_setup or {}
         templates = StageTemplate.objects.all()
         # 前置任务可以跨阶段，先把所有 Task 建出来，再按模板里的依赖关系回填
         template_task_map = {}
         created_tasks = []
         for i, tmpl in enumerate(templates):
+            setup = stage_setup.get(tmpl.pk) or {}
+            stage_assignee = setup.get('assignee') or tmpl.default_assignee
             ps = ProductStage.objects.create(
                 product=self,
                 name=tmpl.name,
                 order=tmpl.order,
                 department=tmpl.department,
                 allow_parallel=tmpl.allow_parallel,
-                assignee=tmpl.default_assignee,
+                assignee=stage_assignee,
                 status='in_progress' if (i == 0 and self.status != 'draft') else 'pending',
-                started_at=timezone.now() if (i == 0 and self.status != 'draft') else None,
+                started_at=(
+                    timezone.now() if (i == 0 and self.status != 'draft')
+                    else setup.get('started_at')
+                ),
+                expected_end_date=setup.get('expected_end_date'),
             )
             for j, t_tmpl in enumerate(tmpl.task_templates.all()):
+                # 立项阶段（第一阶段）建好就要开始推进，子任务默认归阶段负责人，
+                # 避免新项目一创建就出现一批「负责人未指定」的信息缺失提醒。
+                task_assignee = stage_assignee if i == 0 else None
                 task = Task.objects.create(
                     product_stage=ps,
                     name=t_tmpl.name,
                     order=j + 1,
                     status='pending',
                     is_milestone=t_tmpl.is_milestone,
+                    assignee=task_assignee,
                 )
                 template_task_map[t_tmpl.pk] = task
                 created_tasks.append((task, t_tmpl))
@@ -189,13 +220,14 @@ class Product(models.Model):
                     )
 
         for task, t_tmpl in created_tasks:
-            if not t_tmpl.depends_on_id:
-                continue
-            predecessor = template_task_map.get(t_tmpl.depends_on_id)
-            if predecessor is None or predecessor.pk == task.pk:
-                continue
-            task.depends_on = predecessor
-            task.save(update_fields=['depends_on'])
+            predecessors = [
+                template_task_map[pk]
+                for pk in t_tmpl.depends_on.values_list('pk', flat=True)
+                if pk in template_task_map
+                and template_task_map[pk].pk != task.pk
+            ]
+            if predecessors:
+                task.depends_on.set(predecessors)
 
         if self.status != 'draft':
             self.current_stage_order = 1
@@ -226,6 +258,8 @@ class Product(models.Model):
             return False
         self.status = 'paused'
         self.save(update_fields=['status'])
+        # 暂停的项目不占用任何人的待办，项目/阶段/任务三层一起清掉
+        self.sync_all_auto_todos()
         return True
 
     def resume(self):
@@ -234,6 +268,8 @@ class Product(models.Model):
             return False
         self.status = 'active'
         self.save(update_fields=['status'])
+        # 按当前负责人把三层待办重建回来
+        self.sync_all_auto_todos()
         return True
 
     def can_be_managed_by(self, user):
@@ -246,7 +282,13 @@ class Product(models.Model):
         from datetime import time
         from accounts.models import TodoItem
 
-        todo = getattr(self, 'auto_todo', None)
+        todo = _cached_auto_todo(self)
+
+        # 暂停/取消的项目不占用待办：直接清掉，恢复项目时再重建
+        if self.status in ('paused', 'cancelled'):
+            if todo:
+                todo.delete()
+            return
 
         if not self.assignee_id:
             if todo:
@@ -278,6 +320,17 @@ class Product(models.Model):
                 source_product=self,
                 is_auto=True,
             )
+
+    def sync_all_auto_todos(self):
+        """项目、阶段、任务三层的自动待办一起刷新。
+
+        暂停/取消时用来把整棵树的待办清掉，恢复时再按当前负责人建回来。
+        """
+        self.sync_auto_todo()
+        for stage in self.stages.all():
+            stage.sync_auto_todo()
+            for task in stage.tasks.all():
+                task.sync_auto_todo()
 
 
 class ProductStage(models.Model):
@@ -328,7 +381,13 @@ class ProductStage(models.Model):
         from datetime import time
         from accounts.models import TodoItem
 
-        todo = getattr(self, 'auto_todo', None)
+        todo = _cached_auto_todo(self)
+
+        # 暂停/取消的项目下不再挂阶段待办；恢复项目时由 sync_all_auto_todos 重建
+        if self.product.status in ('paused', 'cancelled'):
+            if todo:
+                todo.delete()
+            return
 
         if not self.assignee_id:
             if todo:
@@ -451,8 +510,9 @@ class Task(models.Model):
     order = models.PositiveIntegerField(default=0, verbose_name='排序')
     completed_at = models.DateTimeField(null=True, blank=True, verbose_name='完成时间')
     is_milestone = models.BooleanField(default=False, verbose_name='是否里程碑')
-    depends_on = models.ForeignKey(
-        'self', on_delete=models.SET_NULL, null=True, blank=True,
+    # 前置任务可以有多个：全部完成后本任务才解锁，开始时间以其中结束最晚的为准
+    depends_on = models.ManyToManyField(
+        'self', symmetrical=False, blank=True,
         related_name='dependents', verbose_name='前置任务',
     )
 
@@ -466,26 +526,33 @@ class Task(models.Model):
 
     @property
     def is_blocked(self):
-        """前置任务还没完成时，本任务不能开始（也就不能设开始时间）。"""
-        if not self.depends_on_id:
+        """有前置任务还没完成时，本任务不能开始（也就不能设开始时间）。"""
+        if not self.pk:
             return False
-        return self.depends_on is None or self.depends_on.status != 'completed'
+        # 遍历 prefetch 缓存而不是 .filter()：看板/提醒扫描里会一次查很多任务，
+        # 这里再走一次 SQL 就是 N+1
+        return any(p.status != 'completed' for p in self.depends_on.all())
 
     @property
     def blocking_predecessor_name(self):
-        if not self.is_blocked:
-            return ''
-        return self.depends_on.name if self.depends_on else '前置任务'
+        """还没完成的前置任务名，多个用「、」连接。"""
+        incomplete = [
+            p.name for p in self.depends_on.all() if p.status != 'completed'
+        ]
+        return '、'.join(incomplete)
 
-    def creates_dependency_cycle(self, predecessor):
-        """把 predecessor 设为本任务的前置任务，是否会形成环。"""
+    def creates_dependency_cycle(self, predecessors):
+        """把 predecessors 都设为本任务的前置任务，是否会形成环。"""
         seen = set()
-        node = predecessor
-        while node is not None:
-            if node.pk == self.pk or node.pk in seen:
+        stack = list(predecessors)
+        while stack:
+            node = stack.pop()
+            if node.pk == self.pk:
                 return True
+            if node.pk in seen:
+                continue
             seen.add(node.pk)
-            node = node.depends_on
+            stack.extend(node.depends_on.all())
         return False
 
     def mark_completed(self):
@@ -509,7 +576,9 @@ class Task(models.Model):
 
     def _activate_dependents(self, completed_at):
         dependents = list(
-            self.dependents.exclude(status='completed').select_related(
+            self.dependents.exclude(status='completed')
+            .prefetch_related('depends_on')
+            .select_related(
                 'assignee__profile',
                 'product_stage__assignee__profile',
                 'product_stage__product__assignee__profile',
@@ -518,13 +587,35 @@ class Task(models.Model):
         if not dependents:
             return
 
-        started_at = completed_at
-        start_date = timezone.localtime(started_at).date()
-        expected_end_date = start_date + timedelta(days=7)
-
         for dependent in dependents:
-            # 前置任务完成后自动匹配开始时间，预计结束默认 7 天后；
+            predecessors = list(dependent.depends_on.all())
+            # 多个前置任务时，只要还有一个没完成就不能激活；
+            # 等最后一个前置完成、再次走到这里时再统一排期
+            if any(p.status != 'completed' for p in predecessors):
+                continue
+
+            def _finish_date(p):
+                if p.actual_end_date:
+                    return timezone.localtime(p.actual_end_date).date()
+                return p.expected_end_date
+
+            dated = [p for p in predecessors if _finish_date(p)]
+            latest = max(dated, key=_finish_date) if dated else None
+            if latest is not None and latest.actual_end_date:
+                started_at = latest.actual_end_date
+            else:
+                finish_date = (
+                    _finish_date(latest) if latest is not None
+                    else timezone.localtime(completed_at).date()
+                )
+                started_at = timezone.make_aware(
+                    timezone.datetime.combine(finish_date, time.min)
+                )
+            # 以结束时间最晚的前置任务为准：开始时间接在它后面，预计结束默认 7 天后；
             # 阶段负责人之后仍可手工修改这两个时间。
+            start_date = timezone.localtime(started_at).date()
+            expected_end_date = start_date + timedelta(days=7)
+            predecessor_names = '、'.join(p.name for p in predecessors)
             try:
                 dependent.started_at = started_at
                 dependent.expected_end_date = expected_end_date
@@ -555,7 +646,7 @@ class Task(models.Model):
                 log_action(
                     None, '前置任务完成，任务自动开始', 'task', dependent.pk,
                     f'{dependent.product_stage.product.name} / {dependent.name}',
-                    f'前置任务「{self.name}」已完成，'
+                    f'前置任务「{predecessor_names}」已完成，'
                     f'开始时间自动设为 {start_date:%Y-%m-%d}，'
                     f'预计结束 {expected_end_date:%Y-%m-%d}',
                 )
@@ -580,15 +671,22 @@ class Task(models.Model):
         from datetime import time
         from accounts.models import TodoItem
 
-        todo = getattr(self, 'auto_todo', None)
+        todo = _cached_auto_todo(self)
+
+        stage = self.product_stage
+        product = stage.product
+
+        # 暂停/取消的项目下不再挂任务待办；恢复项目时由 sync_all_auto_todos 重建
+        if product.status in ('paused', 'cancelled'):
+            if todo:
+                todo.delete()
+            return
 
         if not self.assignee_id:
             if todo:
                 todo.delete()
             return
 
-        stage = self.product_stage
-        product = stage.product
         content = f'{product.name} · {stage.name} · {self.name}'[:200]
         due_at = None
         if self.expected_end_date:

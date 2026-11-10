@@ -2,12 +2,12 @@
 # 启用：systemctl daemon-reload && systemctl enable --now kaipin-remind.timer
 
 [Unit]
-Description=每日触发 Kaipin 提醒扫描
+Description=每日触发 Kaipin 超期/信息缺失提醒扫描
 
 [Timer]
-OnCalendar=*-*-* 09:00:00
+# 每日 09:30 发超期、信息缺失等提醒；到期前提醒由 kaipin-remind-upcoming.timer 单独发
+OnCalendar=*-*-* 09:30:00
 Persistent=true
-RandomizedDelaySec=300
 Unit=kaipin-remind.service
 
 [Install]

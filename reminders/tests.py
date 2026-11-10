@@ -280,14 +280,19 @@ class StageOverdueAggregationTest(TestCase):
         self.assertEqual(len(calls), 1, '6 个超期阶段应收敛成 1 条消息')
 
         content = calls[0][0][1]
-        self.assertIn('你负责的 3 个品存在超期阶段', content)
+        self.assertIn('你负责的 3 个品存在超期任务', content)
         for p_idx in (1, 2, 3):
-            self.assertIn(f'阶段聚合品{p_idx}', content)
-            # 同一个品下的两个阶段要合并到同一行
-            self.assertIn(f'阶段{p_idx}-1、阶段{p_idx}-2', content)
-            # 精准到超期任务名，不能只给数量
-            self.assertIn(f'「任务{p_idx}-1」', content)
-            self.assertIn(f'「任务{p_idx}-2」', content)
+            self.assertIn(f'“阶段聚合品{p_idx}”', content)
+            # 同一个品下的两个阶段合并到同一行，并带阶段负责人
+            self.assertIn(
+                f'超期阶段：阶段{p_idx}-1（未指定）、阶段{p_idx}-2（未指定）',
+                content,
+            )
+            # 精准到超期任务名和执行人，格式与管理员汇总一致
+            self.assertIn(
+                f'超期任务：“任务{p_idx}-1”未指定、“任务{p_idx}-2”未指定',
+                content,
+            )
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
     def test_stage_log_written_per_stage(self, mock_send):
@@ -360,14 +365,17 @@ class ProductOverdueAggregationTest(TestCase):
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
     def test_admin_message_lists_overdue_stages_and_assignees(self, mock_send):
-        """管理员聚合消息要列出每个品具体哪些阶段超期、各自由谁负责。"""
+        """管理员聚合消息要列出每个品具体哪些阶段超期、各自由谁负责、任务归谁做。"""
         owner_a = User.objects.create(username='agg_owner_a', first_name='阶段负责人甲')
         owner_b = User.objects.create(username='agg_owner_b', first_name='阶段负责人乙')
 
-        # 品1：两个超期阶段，都是甲负责
+        # 品1：两个超期阶段，都是甲负责；任务执行人也填上
         first_stage = self.products[0].stages.first()
         first_stage.assignee = owner_a
         first_stage.save()
+        first_task = first_stage.tasks.first()
+        first_task.assignee = owner_a
+        first_task.save()
         second_stage = ProductStage.objects.create(
             product=self.products[0], name='聚合阶段1-2',
             department=self.dept, order=2, assignee=owner_a,
@@ -375,33 +383,41 @@ class ProductOverdueAggregationTest(TestCase):
         Task.objects.create(
             product_stage=second_stage, name='聚合任务1-2', order=1,
             status='overdue', deadline=date.today() - timedelta(days=1),
+            assignee=owner_a,
         )
         # 同一阶段两个超期任务 → 该阶段数量应为 2
         Task.objects.create(
             product_stage=second_stage, name='聚合任务1-3', order=2,
             status='overdue', deadline=date.today() - timedelta(days=1),
+            assignee=owner_a,
         )
 
         # 品2：乙负责
         other_stage = self.products[1].stages.first()
         other_stage.assignee = owner_b
         other_stage.save()
+        other_task = other_stage.tasks.first()
+        other_task.assignee = owner_b
+        other_task.save()
 
         scan_and_remind()
 
         content = [c for c in mock_send.call_args_list if c[0][0] == 'wx_admin1'][0][0][1]
+        # 品名一行，不带数量后缀
+        self.assertIn('“聚合超期品1”', content)
+        self.assertNotIn('“聚合超期品1”（', content)
+        # 阶段只列名称和负责人，任务行列任务名和执行人
         self.assertIn(
-            '超期阶段：聚合阶段1（阶段负责人甲，1 个超期任务）、'
-            '聚合阶段1-2（阶段负责人甲，2 个超期任务）',
+            '超期阶段：聚合阶段1（阶段负责人甲）、聚合阶段1-2（阶段负责人甲）',
             content,
         )
-        self.assertIn('超期阶段：聚合阶段2（阶段负责人乙，1 个超期任务）', content)
-        # 具体到超期任务名
-        self.assertIn('超期任务：聚合阶段1：「聚合任务1」', content)
+        self.assertIn('超期阶段：聚合阶段2（阶段负责人乙）', content)
         self.assertIn(
-            '聚合阶段1-2：「聚合任务1-2」、「聚合任务1-3」', content,
+            '超期任务：“聚合任务1”阶段负责人甲、'
+            '“聚合任务1-2”阶段负责人甲、“聚合任务1-3”阶段负责人甲',
+            content,
         )
-        self.assertIn('聚合阶段2：「聚合任务2」', content)
+        self.assertIn('超期任务：“聚合任务2”阶段负责人乙', content)
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
     def test_unassigned_stage_shows_placeholder(self, mock_send):
@@ -409,7 +425,7 @@ class ProductOverdueAggregationTest(TestCase):
         scan_and_remind()
 
         content = [c for c in mock_send.call_args_list if c[0][0] == 'wx_admin1'][0][0][1]
-        self.assertIn('超期阶段：聚合阶段1（未指定，1 个超期任务）', content)
+        self.assertIn('超期阶段：聚合阶段1（未指定）', content)
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
     def test_unbound_admin_skipped(self, mock_send):
@@ -466,6 +482,78 @@ class ProductOverdueAggregationTest(TestCase):
         content = calls[0][0][1]
         self.assertIn('聚合超期品2', content)
         self.assertNotIn('聚合超期品1', content)
+
+
+class ReminderScanModeTest(TestCase):
+    """提前预警与超期提醒分两个时间点执行，互不串场。"""
+
+    def setUp(self):
+        self.dept = Department.objects.create(name='分时提醒部门')
+        self.creator = User.objects.create(username='mode_creator', first_name='创建人')
+
+        self.admin = User.objects.create(username='mode_admin', first_name='管理员')
+        self.admin.profile.role = 'admin'
+        self.admin.profile.wechat_userid = 'wx_mode_admin'
+        self.admin.profile.save()
+
+        self.owner = User.objects.create(username='mode_owner', first_name='品负责人')
+        self.owner.profile.wechat_userid = 'wx_mode_owner'
+        self.owner.profile.save()
+
+        self.executor = User.objects.create(username='mode_exec', first_name='执行人')
+        self.executor.profile.wechat_userid = 'wx_mode_exec'
+        self.executor.profile.save()
+
+        self.product = Product.objects.create(
+            name='分时提醒品', creator=self.creator, assignee=self.owner,
+        )
+        self.stage = ProductStage.objects.create(
+            product=self.product, name='分时阶段', department=self.dept, order=1,
+            status='in_progress',
+            started_at=timezone.now() - timedelta(days=1),
+        )
+        # 2 天后到期 → 提前预警
+        Task.objects.create(
+            product_stage=self.stage, name='临近任务', assignee=self.executor,
+            order=1, expected_end_date=date.today() + timedelta(days=2),
+            deadline=date.today() + timedelta(days=2),
+        )
+        # 已超期 → 超期提醒
+        Task.objects.create(
+            product_stage=self.stage, name='超期任务', assignee=self.executor,
+            order=2, status='overdue',
+            expected_end_date=date.today() - timedelta(days=1),
+            deadline=date.today() - timedelta(days=1),
+        )
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_advance_mode_sends_only_upcoming(self, mock_send):
+        scan_and_remind(mode='advance')
+        joined = '\n'.join(c[0][1] for c in mock_send.call_args_list)
+        self.assertIn('距离截止还有 2 天', joined)
+        self.assertNotIn('已超期', joined)
+        self.assertNotIn('个品存在超期任务', joined)
+        # 到期前提醒仍保留原来的「姓名 + 你好」开头
+        self.assertIn('执行人你好，我是项目管理智能机器人。', joined)
+        # 管理员不收到期前提醒
+        self.assertEqual(
+            [c for c in mock_send.call_args_list if c[0][0] == 'wx_mode_admin'], []
+        )
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_other_mode_skips_upcoming(self, mock_send):
+        scan_and_remind(mode='other')
+        joined = '\n'.join(c[0][1] for c in mock_send.call_args_list)
+        self.assertIn('已超期', joined)
+        self.assertNotIn('距离截止还有', joined)
+        # 超期提醒统一用「您好，」开头，不再带姓名和「你好」
+        for content in (c[0][1] for c in mock_send.call_args_list):
+            self.assertTrue(content.startswith('您好，我是项目管理智能机器人。'), content)
+            self.assertNotIn('你好', content)
+        # 管理员照常收品级超期汇总
+        self.assertTrue(
+            [c for c in mock_send.call_args_list if c[0][0] == 'wx_mode_admin']
+        )
 
 
 class UpwardNotifyLogTest(TestCase):
@@ -652,18 +740,18 @@ class StageOwnerOverdueAggregationTest(TestCase):
         self.assertEqual(len(calls1), 1, '一个人负责多个阶段也只发一条')
         content1 = calls1[0][0][1]
         self.assertIn('你负责的 2 个阶段存在超期任务', content1)
-        self.assertIn('「阶段负责人测试品」·「包装设计」（2 个超期任务）', content1)
-        self.assertIn('「阶段负责人测试品」·「营销策划」（1 个超期任务）', content1)
+        self.assertIn('“阶段负责人测试品”·“包装设计”（2 个超期任务）', content1)
+        self.assertIn('“阶段负责人测试品”·“营销策划”（1 个超期任务）', content1)
         # 具体到超期任务名
-        self.assertIn('「包装设计任务1」、「包装设计任务2」', content1)
-        self.assertIn('「营销策划任务1」', content1)
+        self.assertIn('“包装设计任务1”、“包装设计任务2”', content1)
+        self.assertIn('“营销策划任务1”', content1)
 
         calls2 = [c for c in mock_send.call_args_list if c[0][0] == 'wx_stage_owner2']
         self.assertEqual(len(calls2), 1)
         content2 = calls2[0][0][1]
-        self.assertIn('「阶段负责人测试品」·「产品生产」（3 个超期任务）', content2)
+        self.assertIn('“阶段负责人测试品”·“产品生产”（3 个超期任务）', content2)
         self.assertIn(
-            '「产品生产任务1」、「产品生产任务2」、「产品生产任务3」', content2,
+            '“产品生产任务1”、“产品生产任务2”、“产品生产任务3”', content2,
         )
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
@@ -688,7 +776,7 @@ class StageOwnerOverdueAggregationTest(TestCase):
         calls = [c for c in mock_send.call_args_list if c[0][0] == 'wx_stage_owner1']
         self.assertEqual(len(calls), 1)
         content = calls[0][0][1]
-        self.assertIn('你负责的 1 个品存在超期阶段', content)
+        self.assertIn('你负责的 1 个品存在超期任务', content)
         self.assertNotIn('你负责的 2 个阶段存在超期任务', content)
 
 
@@ -868,17 +956,19 @@ class DueBeforeReminderTest(TestCase):
         self.assertEqual(mock_send.call_args_list, [])
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
-    def test_stage_due_notifies_stage_product_and_admin(self, mock_send):
+    def test_stage_due_notifies_stage_and_product_owners(self, mock_send):
         self._set_stage_due_in(2)
 
         scan_and_remind()
 
-        for userid in ('wx_due_so', 'wx_due_po', 'wx_due_admin'):
+        for userid in ('wx_due_so', 'wx_due_po'):
             contents = self._contents_to(mock_send, userid)
             self.assertEqual(len(contents), 1, f'{userid} 应收到 1 条阶段到期提醒')
             self.assertIn('到期测试阶段', contents[0])
             self.assertIn('距离截止还有 2 天', contents[0])
         self.assertEqual(self._contents_to(mock_send, 'wx_due_ta'), [])
+        # 提前预警不抄送管理员
+        self.assertEqual(self._contents_to(mock_send, 'wx_due_admin'), [])
         self.assertTrue(UpwardNotifyLog.objects.filter(
             content_type_label='stage', object_id=self.stage.pk,
             event_type='upcoming', sent_date=self.today,
@@ -891,18 +981,20 @@ class DueBeforeReminderTest(TestCase):
         self.assertEqual(mock_send.call_args_list, [])
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
-    def test_product_due_notifies_owner_and_admin(self, mock_send):
+    def test_product_due_notifies_owner_only(self, mock_send):
         self._set_product_due_in(1)
 
         scan_and_remind()
 
-        for userid in ('wx_due_po', 'wx_due_admin'):
+        for userid in ('wx_due_po',):
             contents = self._contents_to(mock_send, userid)
             self.assertEqual(len(contents), 1, f'{userid} 应收到 1 条项目到期提醒')
             self.assertIn('到期测试品', contents[0])
             self.assertIn('距离截止还有 1 天', contents[0])
         self.assertEqual(self._contents_to(mock_send, 'wx_due_so'), [])
         self.assertEqual(self._contents_to(mock_send, 'wx_due_ta'), [])
+        # 提前预警不抄送管理员
+        self.assertEqual(self._contents_to(mock_send, 'wx_due_admin'), [])
         self.assertTrue(UpwardNotifyLog.objects.filter(
             content_type_label='product', object_id=self.product.pk,
             event_type='upcoming', sent_date=self.today,
@@ -933,20 +1025,19 @@ class DueBeforeReminderTest(TestCase):
         stage_owner_msgs = self._contents_to(mock_send, 'wx_due_so')
         self.assertEqual(len(stage_owner_msgs), 1)
         self.assertIn('以下 2 项即将到期', stage_owner_msgs[0])
-        self.assertIn('「到期测试任务」子任务', stage_owner_msgs[0])
-        self.assertIn('「到期测试阶段」阶段', stage_owner_msgs[0])
+        self.assertIn('“到期测试任务”子任务', stage_owner_msgs[0])
+        self.assertIn('到期测试品：到期测试阶段预计', stage_owner_msgs[0])
 
         product_owner_msgs = self._contents_to(mock_send, 'wx_due_po')
         self.assertEqual(len(product_owner_msgs), 1)
         self.assertIn('以下 3 项即将到期', product_owner_msgs[0])
-        for expected in ('「到期测试任务」子任务', '「到期测试阶段」阶段', '「到期测试品」项目'):
+        for expected in (
+            '“到期测试任务”子任务', '到期测试品：到期测试阶段预计', '“到期测试品”项目',
+        ):
             self.assertIn(expected, product_owner_msgs[0])
 
-        admin_msgs = self._contents_to(mock_send, 'wx_due_admin')
-        self.assertEqual(len(admin_msgs), 1)
-        self.assertIn('以下 2 项即将到期', admin_msgs[0])
-        self.assertIn('「到期测试阶段」阶段', admin_msgs[0])
-        self.assertIn('「到期测试品」项目', admin_msgs[0])
+        # 管理员/领导层不再收提前预警
+        self.assertEqual(self._contents_to(mock_send, 'wx_due_admin'), [])
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
     def test_blocked_task_gets_no_due_reminder(self, mock_send):
@@ -957,8 +1048,7 @@ class DueBeforeReminderTest(TestCase):
             started_at=timezone.now() - timedelta(days=1),
             expected_end_date=self.today + timedelta(days=30),
         )
-        self.task.depends_on = blocker
-        self.task.save(update_fields=['depends_on'])
+        self.task.depends_on.set([blocker])
         self._set_task_due_in(2)
 
         scan_and_remind()
@@ -1030,7 +1120,7 @@ class IncompleteTaskReminderTest(TestCase):
 
         contents = self._contents_to(mock_send, 'wx_inc_so')
         self.assertEqual(len(contents), 1)
-        self.assertIn('「信息补全测试品」·「包装设计」·「彩盒设计」', contents[0])
+        self.assertIn('“信息补全测试品”·“包装设计”·“彩盒设计”', contents[0])
         self.assertIn('缺执行人、开始时间、结束时间', contents[0])
         # 只提醒阶段负责人，不打扰品负责人/执行人
         self.assertEqual(self._contents_to(mock_send, 'wx_inc_po'), [])
@@ -1057,9 +1147,49 @@ class IncompleteTaskReminderTest(TestCase):
         mock_send.assert_not_called()
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_initiation_stage_sends_no_incomplete_reminder(self, mock_send):
+        """立项阶段不再强制要求执行人/起止时间，缺字段也不催阶段负责人。"""
+        self._clear(assignee=None, started_at=None, expected_end_date=None)
+        self.stage.name = '立项'
+        self.stage.save(update_fields=['name'])
+
+        scan_and_remind()
+
+        mock_send.assert_not_called()
+        self.assertFalse(UpwardNotifyLog.objects.filter(
+            content_type_label='stage', object_id=self.stage.pk,
+            event_type='incomplete', sent_date=self.today,
+        ).exists())
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
     def test_completed_task_sends_no_incomplete_reminder(self, mock_send):
         self._clear(assignee=None, started_at=None, expected_end_date=None,
                     status='completed')
+
+        scan_and_remind()
+
+        mock_send.assert_not_called()
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_stage_not_started_yet_sends_no_incomplete_reminder(self, mock_send):
+        """阶段开始时间还没到：先别催阶段负责人填执行人/起止时间。"""
+        self._clear(assignee=None, started_at=None, expected_end_date=None)
+        self.stage.started_at = timezone.now() + timedelta(days=3)
+        self.stage.save(update_fields=['started_at'])
+
+        scan_and_remind()
+
+        mock_send.assert_not_called()
+        self.assertFalse(UpwardNotifyLog.objects.filter(
+            content_type_label='stage', object_id=self.stage.pk,
+            event_type='incomplete', sent_date=self.today,
+        ).exists())
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_stage_without_start_time_sends_no_incomplete_reminder(self, mock_send):
+        self._clear(assignee=None, started_at=None, expected_end_date=None)
+        self.stage.started_at = None
+        self.stage.save(update_fields=['started_at'])
 
         scan_and_remind()
 
@@ -1098,8 +1228,8 @@ class IncompleteTaskReminderTest(TestCase):
         contents = self._contents_to(mock_send, 'wx_inc_so')
         self.assertEqual(len(contents), 1)
         self.assertIn('有 2 个子任务必填信息未填写', contents[0])
-        self.assertIn('「彩盒设计」', contents[0])
-        self.assertIn('「刀模确认」', contents[0])
+        self.assertIn('“彩盒设计”', contents[0])
+        self.assertIn('“刀模确认”', contents[0])
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
     def test_stage_owner_without_wechat_is_skipped(self, mock_send):
@@ -1120,10 +1250,248 @@ class IncompleteTaskReminderTest(TestCase):
             started_at=timezone.now() - timedelta(days=1),
             expected_end_date=self.today + timedelta(days=30),
         )
-        self.task.depends_on = blocker
+        self.task.depends_on.set([blocker])
         self.task.started_at = None
-        self.task.save(update_fields=['depends_on', 'started_at'])
+        self.task.save(update_fields=['started_at'])
 
         scan_and_remind()
 
         mock_send.assert_not_called()
+
+
+class LiangZiAngAllOverdueRolesTest(TestCase):
+    """同一个人兼任多个角色时，每个角色的超期提醒都要收到。
+
+    梁子昂同时是：管理员、品A的总负责人、品B的阶段负责人、品A两件任务的执行人。
+    一次扫描后，他应按角色收到 4 条消息：
+
+      1. 执行人：名下 2 件超期任务合并成一条（不再一件一条）
+      2. 阶段负责人：品B「设计」阶段的超期汇总
+      3. 项目负责人：品A「策划」阶段的超期汇总
+      4. 管理员：所有超期品的汇总
+
+    注意角色之间的去重规则：同一个人既是某阶段的负责人、又是该品的总负责人时，
+    只发品级那一条（见 StageOwnerOverdueAggregationTest），本用例把两个角色
+    放在不同的品上，才能分别验证两种消息的措辞。
+    """
+
+    def setUp(self):
+        self.dept = Department.objects.create(name='多角色超期测试部')
+        self.today = timezone.localtime(timezone.now()).date()
+        yesterday = self.today - timedelta(days=1)
+
+        self.liang = User.objects.create_user(
+            username='liang_ziang', password='pass', first_name='梁子昂',
+        )
+        self.liang.profile.department = self.dept
+        self.liang.profile.wechat_userid = 'wx_liang_ziang'
+        self.liang.profile.role = 'admin'
+        self.liang.profile.save()
+
+        # 这几个同事都不绑企微：本测试只关心梁子昂收到的消息，别把断言搅乱
+        self.planner = User.objects.create_user(
+            username='role_planner', password='pass', first_name='策划同事',
+        )
+        self.designer = User.objects.create_user(
+            username='role_designer', password='pass', first_name='设计同事',
+        )
+        self.producer = User.objects.create_user(
+            username='role_producer', password='pass', first_name='产品同事',
+        )
+
+        # 品A：梁子昂是总负责人；阶段负责人是策划同事
+        self.product_a = Product.objects.create(
+            name='角色测试品A', creator=self.liang, assignee=self.liang,
+            status='active', expected_end_date=self.today + timedelta(days=60),
+        )
+        self.stage_a = ProductStage.objects.create(
+            product=self.product_a, name='策划', department=self.dept,
+            assignee=self.planner, order=1, status='in_progress',
+            started_at=timezone.now() - timedelta(days=10),
+            expected_end_date=self.today + timedelta(days=30),
+        )
+        # 执行人视角：梁子昂名下两件超期任务，应合并成一条提醒
+        self.task_of_liang = Task.objects.create(
+            product_stage=self.stage_a, name='执行人视角任务',
+            assignee=self.liang, order=1, status='overdue',
+            started_at=timezone.now() - timedelta(days=5),
+            expected_end_date=yesterday, deadline=yesterday,
+        )
+        self.task_of_liang_2 = Task.objects.create(
+            product_stage=self.stage_a, name='执行人视角任务2',
+            assignee=self.liang, order=2, status='overdue',
+            started_at=timezone.now() - timedelta(days=5),
+            expected_end_date=yesterday, deadline=yesterday,
+        )
+        # 撑起品级/管理员汇总用的另一件超期任务
+        Task.objects.create(
+            product_stage=self.stage_a, name='策划任务1',
+            assignee=self.planner, order=3, status='overdue',
+            started_at=timezone.now() - timedelta(days=5),
+            expected_end_date=yesterday, deadline=yesterday,
+        )
+
+        # 品B：梁子昂是阶段负责人，总负责人是产品同事
+        self.product_b = Product.objects.create(
+            name='角色测试品B', creator=self.liang, assignee=self.producer,
+            status='active', expected_end_date=self.today + timedelta(days=60),
+        )
+        self.stage_b = ProductStage.objects.create(
+            product=self.product_b, name='设计', department=self.dept,
+            assignee=self.liang, order=1, status='in_progress',
+            started_at=timezone.now() - timedelta(days=10),
+            expected_end_date=self.today + timedelta(days=30),
+        )
+        Task.objects.create(
+            product_stage=self.stage_b, name='设计任务1',
+            assignee=self.designer, order=1, status='overdue',
+            started_at=timezone.now() - timedelta(days=5),
+            expected_end_date=yesterday, deadline=yesterday,
+        )
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_liangziang_receives_one_message_per_role(self, mock_send):
+        scan_and_remind()
+
+        contents = [
+            c[0][1] for c in mock_send.call_args_list
+            if c[0][0] == 'wx_liang_ziang'
+        ]
+        self.assertEqual(len(contents), 4, f'四个角色应各一条，实际：{contents}')
+
+        # 1) 执行人：名下 2 件超期任务合并成一条
+        executor = [m for m in contents if '你有 2 个事项已超期' in m]
+        self.assertEqual(len(executor), 1, contents)
+        self.assertIn(
+            '1. “角色测试品A”·“策划”·“执行人视角任务”', executor[0],
+        )
+        self.assertIn(
+            '2. “角色测试品A”·“策划”·“执行人视角任务2”', executor[0],
+        )
+        self.assertIn('预计', executor[0])
+        self.assertIn('已超期 1 天', executor[0])
+
+        # 2) 阶段负责人：品B 的超期阶段汇总
+        stage_owner = [m for m in contents if '你负责的 1 个阶段存在超期任务' in m]
+        self.assertEqual(len(stage_owner), 1, contents)
+        self.assertIn('“角色测试品B”·“设计”（1 个超期任务）', stage_owner[0])
+        self.assertIn('“设计任务1”', stage_owner[0])
+
+        # 3) 项目负责人：品A 的超期阶段汇总（含具体超期任务名）
+        product_owner = [m for m in contents if '你负责的 1 个品存在超期任务' in m]
+        self.assertEqual(len(product_owner), 1, contents)
+        self.assertIn('“角色测试品A”', product_owner[0])
+        self.assertIn('超期阶段：策划（策划同事）', product_owner[0])
+        self.assertIn(
+            '超期任务：“执行人视角任务”梁子昂、“执行人视角任务2”梁子昂、'
+            '“策划任务1”策划同事',
+            product_owner[0],
+        )
+
+        # 4) 管理员：所有超期品汇总
+        admin = [m for m in contents if '你有 2 个品存在超期任务' in m]
+        self.assertEqual(len(admin), 1, contents)
+        self.assertIn('超期阶段：策划（策划同事）', admin[0])
+        self.assertIn('超期阶段：设计（梁子昂）', admin[0])
+        self.assertIn(
+            '超期任务：“执行人视角任务”梁子昂、“执行人视角任务2”梁子昂、'
+            '“策划任务1”策划同事',
+            admin[0],
+        )
+        self.assertIn('超期任务：“设计任务1”设计同事', admin[0])
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_second_scan_same_day_sends_nothing_new_to_liangziang(self, mock_send):
+        """同一天再扫一遍，各角色的聚合都不重复发。"""
+        scan_and_remind()
+        mock_send.reset_mock()
+        scan_and_remind()
+
+        contents = [
+            c[0][1] for c in mock_send.call_args_list
+            if c[0][0] == 'wx_liang_ziang'
+        ]
+        self.assertEqual(contents, [])
+
+
+class ExecutorOverdueAggregationTest(TestCase):
+    """执行人名下多件超期任务时，每人每天一条合并提醒，不再一件一条。"""
+
+    def setUp(self):
+        self.dept = Department.objects.create(name='执行人聚合部')
+        self.today = timezone.localtime(timezone.now()).date()
+        yesterday = self.today - timedelta(days=1)
+
+        self.executor = User.objects.create_user(
+            username='exec_agg', password='pass', first_name='聚合执行人',
+        )
+        self.executor.profile.department = self.dept
+        self.executor.profile.wechat_userid = 'wx_exec_agg'
+        self.executor.profile.save()
+
+        self.products = []
+        self.tasks = []
+        for idx in (1, 2):
+            product = Product.objects.create(
+                name=f'执行人聚合品{idx}', creator=self.executor, status='active',
+            )
+            stage = ProductStage.objects.create(
+                product=product, name=f'阶段{idx}', department=self.dept,
+                order=1, status='in_progress',
+                started_at=timezone.now() - timedelta(days=10),
+            )
+            task = Task.objects.create(
+                product_stage=stage, name=f'超期任务{idx}',
+                assignee=self.executor, order=1, status='overdue',
+                started_at=timezone.now() - timedelta(days=5),
+                expected_end_date=yesterday, deadline=yesterday,
+            )
+            self.products.append(product)
+            self.tasks.append(task)
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_multiple_overdue_tasks_send_one_message(self, mock_send):
+        scan_and_remind()
+
+        calls = [c for c in mock_send.call_args_list if c[0][0] == 'wx_exec_agg']
+        self.assertEqual(len(calls), 1, '两件超期任务应合并成一条')
+
+        content = calls[0][0][1]
+        self.assertIn('你有 2 个事项已超期，请尽快处理：', content)
+        self.assertIn('1. “执行人聚合品1”·“阶段1”·“超期任务1”', content)
+        self.assertIn('2. “执行人聚合品2”·“阶段2”·“超期任务2”', content)
+        self.assertIn('已超期 1 天', content)
+
+        # 任务级去重记录仍逐件写，第二天/当天重扫不会重复发
+        self.assertEqual(
+            ReminderLog.objects.filter(
+                task__in=self.tasks, reminder_type='overdue',
+            ).count(),
+            2,
+        )
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_second_scan_same_day_sends_nothing_new(self, mock_send):
+        scan_and_remind()
+        mock_send.reset_mock()
+        scan_and_remind()
+
+        calls = [c for c in mock_send.call_args_list if c[0][0] == 'wx_exec_agg']
+        self.assertEqual(calls, [])
+
+    @patch('reminders.wechat.send_wechat_message', return_value=True)
+    def test_single_overdue_task_keeps_original_wording(self, mock_send):
+        """只有一件超期任务时不套用合并措辞，保持原来的单条提醒。"""
+        self.tasks[1].delete()
+
+        scan_and_remind()
+
+        calls = [c for c in mock_send.call_args_list if c[0][0] == 'wx_exec_agg']
+        self.assertEqual(len(calls), 1)
+        content = calls[0][0][1]
+        self.assertIn(
+            '你负责的“执行人聚合品1”项目，在“阶段1”阶段的“超期任务1”事项',
+            content,
+        )
+        self.assertIn('但已超期 1 天，请尽快处理！', content)
+        self.assertNotIn('事项已超期', content)

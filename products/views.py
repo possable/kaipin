@@ -271,12 +271,12 @@ def _notify_project_kickoff(product, actor):
         owner_name = owner.first_name or owner.username
         lines = [
             f'{owner_name}你好，我是项目管理智能机器人。',
-            f'你负责的项目「{product.name}」已立项。',
+            f'你负责的项目“{product.name}”已立项。',
             f'开始时间：{product_start}　预计结束：{product_end}',
         ]
         if first_stage:
             lines.append(
-                f'共 {len(stages)} 个阶段，首个阶段「{first_stage.name}」已开始。'
+                f'共 {len(stages)} 个阶段，首个阶段“{first_stage.name}”已开始。'
             )
         else:
             lines.append(f'共 {len(stages)} 个阶段。')
@@ -299,19 +299,19 @@ def _notify_project_kickoff(product, actor):
             stage = owned_stages[0]
             lines = [
                 f'{recipient_name}你好，我是项目管理智能机器人。',
-                f'你被安排为「{product.name}」项目「{stage.name}」阶段的负责人。',
+                f'你被安排为“{product.name}”项目“{stage.name}”阶段的负责人。',
                 f'项目开始：{product_start}　项目预计结束：{product_end}',
                 f'阶段预计结束：{_fmt_notify_date(stage.expected_end_date)}',
             ]
         else:
-            stage_names = '」「'.join(stage.name for stage in owned_stages)
+            stage_names = '”“'.join(stage.name for stage in owned_stages)
             stage_ends = '；'.join(
-                f'「{stage.name}」{_fmt_notify_date(stage.expected_end_date)}'
+                f'“{stage.name}”{_fmt_notify_date(stage.expected_end_date)}'
                 for stage in owned_stages
             )
             lines = [
                 f'{recipient_name}你好，我是项目管理智能机器人。',
-                f'你被安排为「{product.name}」项目「{stage_names}」阶段的负责人。',
+                f'你被安排为“{product.name}”项目“{stage_names}”阶段的负责人。',
                 f'项目开始：{product_start}　项目预计结束：{product_end}',
                 f'阶段预计结束：{stage_ends}',
             ]
@@ -394,15 +394,93 @@ def _apply_product_profile_fields(product, post_data):
             setattr(product, field, None)
 
 
+def _stage_setup_rows(templates, all_users, post_data=None):
+    """创建页第二步：把阶段模板整理成「负责人 + 起止时间」的行。
+
+    带 post_data 时回填用户填过的值（校验失败重渲染用），否则用模板默认负责人。
+    """
+    names_by_id = {
+        str(u.pk): (u.first_name or u.username) for u in all_users
+    }
+    rows = []
+    for tmpl in templates:
+        row = {
+            'template': tmpl,
+            'assignee_id': str(tmpl.default_assignee_id or ''),
+            'assignee_name': (
+                tmpl.default_assignee.first_name or tmpl.default_assignee.username
+            ) if tmpl.default_assignee else '',
+            'started_at': '',
+            'expected_end_date': '',
+        }
+        if post_data is not None:
+            row['assignee_id'] = post_data.get(f'stage_assignee_{tmpl.pk}', '').strip()
+            row['assignee_name'] = names_by_id.get(row['assignee_id'], '')
+            row['started_at'] = post_data.get(f'stage_started_at_{tmpl.pk}', '').strip()
+            row['expected_end_date'] = post_data.get(
+                f'stage_expected_end_date_{tmpl.pk}', ''
+            ).strip()
+        rows.append(row)
+    return rows
+
+
+def _parse_stage_plan(label, raw_assignee, raw_start, raw_end, project_start, project_end):
+    """校验单个阶段的负责人和起止时间。返回 (assignee, start, end, error)。
+
+    新建项目第二步和建完后的「设置项目流程」共用同一套规则。
+    负责人必填；起止时间可空，但填了就必须落在项目周期内且开始不晚于结束。
+    """
+    if not raw_assignee:
+        return None, None, None, f'「{label}」的负责人不能为空'
+    try:
+        assignee = User.objects.get(pk=int(raw_assignee), is_active=True)
+    except (User.DoesNotExist, ValueError):
+        return None, None, None, f'「{label}」的负责人无效'
+
+    start = None
+    if raw_start:
+        try:
+            start = _parse_dt(raw_start)
+        except ValueError:
+            return None, None, None, f'「{label}」的开始时间格式不正确'
+
+    end = None
+    if raw_end:
+        try:
+            end = datetime.strptime(raw_end, '%Y-%m-%d').date()
+        except ValueError:
+            return None, None, None, f'「{label}」的结束时间格式不正确'
+
+    # 按自然日比较：项目 started_at 可能带时分，直接比 datetime 会把「今天」误判成
+    # 早于项目开始。
+    if start and end and start.date() > end:
+        return None, None, None, f'「{label}」的开始时间不能晚于结束时间'
+    if start and project_start and start.date() < project_start:
+        return None, None, None, f'「{label}」的开始时间不能早于项目开始时间'
+    if start and project_end and start.date() > project_end:
+        return None, None, None, f'「{label}」的开始时间不能晚于项目预计结束'
+    if end and project_end and end > project_end:
+        return None, None, None, f'「{label}」的结束时间不能晚于项目预计结束'
+    if end and project_start and end < project_start:
+        return None, None, None, f'「{label}」的结束时间不能早于项目开始时间'
+
+    return assignee, start, end, None
+
+
 def _render_create_form(request, has_templates, all_users, name='', assignee_id='',
-                        started_at_raw='', expected_end_raw=''):
+                        started_at_raw='', expected_end_raw='', stage_rows=None,
+                        form_step=1):
     """重渲染创建表单：回填标量字段，并用 POST 造一个未落库的草稿回填产品资料。
 
     不加这一步的话，校验失败时用户填的资料会全部丢失（partial 读的是 product.*）。
     profile_required=True 让项目分类/项目类型在新建页始终带红星和浏览器拦截。
+    form_step=2 表示校验失败发生在第二步（各阶段分工），重新打开时直接停在第二步。
     """
     draft = Product()
     _apply_product_profile_fields(draft, request.POST)
+    names_by_id = {
+        str(u.pk): (u.first_name or u.username) for u in all_users
+    }
     return render(request, 'products/product_create.html', {
         'has_templates': has_templates,
         'all_users': all_users,
@@ -410,19 +488,32 @@ def _render_create_form(request, has_templates, all_users, name='', assignee_id=
         'product': draft,
         'form_name': name,
         'form_assignee_id': assignee_id,
+        'form_assignee_name': names_by_id.get(str(assignee_id), ''),
         'form_started_at': started_at_raw,
         'form_expected_end_date': expected_end_raw,
+        'stage_rows': stage_rows or [],
+        'form_step': form_step,
     })
 
 
 @login_required
 def product_create(request):
     if not can_create_product(request.user):
-        raise PermissionDenied
-    has_templates = StageTemplate.objects.exists()
+        # 入口对所有人在页面上可见，点了才提示无权限（不暴露 403 页面）
+        messages.error(
+            request,
+            '你没有新建项目的权限（仅管理员或产品部成员可以新建项目）',
+        )
+        return redirect('kanban')
+    templates = list(
+        StageTemplate.objects.select_related('department', 'default_assignee').order_by('order')
+    )
+    has_templates = bool(templates)
 
-    all_users = User.objects.filter(is_active=True).select_related('profile').order_by(
-        'first_name', 'username'
+    all_users = list(
+        User.objects.filter(is_active=True).select_related('profile').order_by(
+            'first_name', 'username'
+        )
     )
 
     if request.method == 'POST':
@@ -430,6 +521,7 @@ def product_create(request):
         assignee_id = request.POST.get('assignee', '').strip()
         started_at_raw = request.POST.get('started_at', '').strip()
         expected_end_raw = request.POST.get('expected_end_date', '').strip()
+        stage_rows = _stage_setup_rows(templates, all_users, request.POST)
 
         error_msg = None
         if not name:
@@ -462,7 +554,7 @@ def product_create(request):
             messages.error(request, error_msg)
             return _render_create_form(
                 request, has_templates, all_users, name, assignee_id,
-                started_at_raw, expected_end_raw,
+                started_at_raw, expected_end_raw, stage_rows, form_step=1,
             )
         if not has_templates:
             messages.error(request, '尚未配置阶段模板，请先配置。')
@@ -475,8 +567,48 @@ def product_create(request):
             messages.error(request, '总负责人无效。')
             return _render_create_form(
                 request, has_templates, all_users, name, assignee_id,
-                started_at_raw, expected_end_raw,
+                started_at_raw, expected_end_raw, stage_rows, form_step=1,
             )
+
+        # 第二步：各阶段负责人必填，起止时间可留空（之后在详情页补）
+        stage_setup = {}
+        stage_errors = []
+        for tmpl in templates:
+            stage_assignee, stage_start, stage_end, stage_error = _parse_stage_plan(
+                tmpl.name,
+                request.POST.get(f'stage_assignee_{tmpl.pk}', '').strip(),
+                request.POST.get(f'stage_started_at_{tmpl.pk}', '').strip(),
+                request.POST.get(f'stage_expected_end_date_{tmpl.pk}', '').strip(),
+                started_at.date(), expected_end,
+            )
+            if stage_error:
+                stage_errors.append(stage_error)
+                continue
+            stage_setup[tmpl.pk] = {
+                'assignee': stage_assignee,
+                'started_at': stage_start,
+                'expected_end_date': stage_end,
+            }
+        if stage_errors:
+            messages.error(request, '；'.join(stage_errors) + '。')
+            return _render_create_form(
+                request, has_templates, all_users, name, assignee_id,
+                started_at_raw, expected_end_raw, stage_rows, form_step=2,
+            )
+
+        # 防重复提交：网络慢时用户容易连续点「创建并发布」，同一份表单
+        # 在一分钟内重复到达时不再新建，提示已创建并回到看板。
+        recent = Product.objects.filter(
+            creator=request.user,
+            name=name,
+            assignee=assignee,
+            started_at=started_at,
+            expected_end_date=expected_end,
+            created_at__gte=timezone.now() - timedelta(seconds=60),
+        ).order_by('-id').first()
+        if recent is not None:
+            messages.info(request, f'项目「{name}」刚刚已创建，无需重复提交。')
+            return redirect('kanban')
 
         product = Product(
             name=name, creator=request.user, assignee=assignee, status='draft',
@@ -484,7 +616,7 @@ def product_create(request):
         )
         _apply_product_profile_fields(product, request.POST)
         product.save()
-        product.create_stages_from_templates()
+        product.create_stages_from_templates(stage_setup)
         # 新建即发布：创建完直接正式开始，不再多一道「草稿 → 发布」的手续。
         # 先建草稿再 publish()，是为了复用发布时激活第一个阶段的逻辑。
         product.publish()
@@ -495,14 +627,14 @@ def product_create(request):
         stage_note = f'，首阶段「{first_stage.name}」已开始' if first_stage else ''
         log_action(request.user, '创建新品', 'product', product.id, product.name,
                    f'已发布，共 {product.stages.count()} 个阶段{stage_note}')
-        # 阶段和模板里的默认负责人已落位，给项目负责人和阶段负责人发立项通知
+        # 各阶段负责人已在第二步填好，给项目负责人和阶段负责人发立项通知
         _notify_project_kickoff(product, request.user)
         messages.success(request, f'新品 "{name}" 已创建并发布，项目正式开始。')
-        # 建完直接进「设置项目流程」弹窗：趁管理者还在页面上，把各阶段负责人
-        # 和起止时间一次性补齐；不想现在设置的可以点「稍后设置」。
-        return redirect(f"{reverse('product_detail', args=[product.pk])}?setup=1")
+        # 创建成功后直接回看板，新项目马上出现在列表里
+        return redirect('kanban')
 
-    return _render_create_form(request, has_templates, all_users)
+    stage_rows = _stage_setup_rows(templates, all_users)
+    return _render_create_form(request, has_templates, all_users, stage_rows=stage_rows)
 
 
 @login_required
@@ -531,53 +663,16 @@ def product_setup_stages(request, pk):
     parsed = []
     errors = []
     for stage in stages:
-        raw_assignee = request.POST.get(f'assignee_{stage.pk}', '').strip()
-        raw_start = request.POST.get(f'started_at_{stage.pk}', '').strip()
-        raw_end = request.POST.get(f'expected_end_date_{stage.pk}', '').strip()
-
-        assignee = None
-        if raw_assignee:
-            try:
-                assignee = User.objects.get(pk=int(raw_assignee))
-            except (User.DoesNotExist, ValueError):
-                errors.append(f'「{stage.name}」的负责人无效')
-                continue
-
-        start = None
-        if raw_start:
-            try:
-                start = _parse_dt(raw_start)
-            except ValueError:
-                errors.append(f'「{stage.name}」的开始时间格式不正确')
-                continue
-
-        end = None
-        if raw_end:
-            try:
-                end = datetime.strptime(raw_end, '%Y-%m-%d').date()
-            except ValueError:
-                errors.append(f'「{stage.name}」的结束时间格式不正确')
-                continue
-
-        # 与 stage_update_field 保持同一套约束，但按自然日比较：
-        # 项目 started_at 可能带时分，直接比 datetime 会把「今天」误判成
-        # 早于项目开始。
-        if start and end and start.date() > end:
-            errors.append(f'「{stage.name}」的开始时间不能晚于结束时间')
+        assignee, start, end, error = _parse_stage_plan(
+            stage.name,
+            request.POST.get(f'assignee_{stage.pk}', '').strip(),
+            request.POST.get(f'started_at_{stage.pk}', '').strip(),
+            request.POST.get(f'expected_end_date_{stage.pk}', '').strip(),
+            project_start, project_end,
+        )
+        if error:
+            errors.append(error)
             continue
-        if start and project_start and start.date() < project_start:
-            errors.append(f'「{stage.name}」的开始时间不能早于项目开始时间')
-            continue
-        if start and project_end and start.date() > project_end:
-            errors.append(f'「{stage.name}」的开始时间不能晚于项目预计结束')
-            continue
-        if end and project_end and end > project_end:
-            errors.append(f'「{stage.name}」的结束时间不能晚于项目预计结束')
-            continue
-        if end and project_start and end < project_start:
-            errors.append(f'「{stage.name}」的结束时间不能早于项目开始时间')
-            continue
-
         parsed.append((stage, assignee, start, end))
 
     if errors:
@@ -594,7 +689,7 @@ def product_setup_stages(request, pk):
         if old_assignee != assignee:
             _notify_new_assignee(
                 stage, old_assignee, assignee, request.user,
-                f'「{product.name} · {stage.name}」阶段',
+                f'“{product.name} · {stage.name}”阶段',
             )
 
     log_action(request.user, '设置项目流程', 'product', product.pk, product.name,
@@ -614,10 +709,13 @@ def _annotate_stage_permissions(product, stages, user):
     # 一次性查出来并按阶段分组，后面判断环时纯内存遍历，避免 N+1 查询。
     all_product_tasks = list(
         Task.objects.filter(product_stage__product=product)
-        .select_related('product_stage', 'depends_on')
+        .select_related('product_stage')
+        .prefetch_related('depends_on')
         .order_by('product_stage__order', 'order', 'id')
     )
-    dependency_map = {t.pk: t.depends_on_id for t in all_product_tasks}
+    dependency_map = {
+        t.pk: [p.pk for p in t.depends_on.all()] for t in all_product_tasks
+    }
     tasks_by_stage = {}
     for candidate in all_product_tasks:
         tasks_by_stage.setdefault(candidate.product_stage_id, []).append(candidate)
@@ -631,12 +729,15 @@ def _annotate_stage_permissions(product, stages, user):
 
     def _would_cycle(task, candidate):
         seen = set()
-        node = candidate.pk
-        while node is not None:
-            if node == task.pk or node in seen:
+        stack = [candidate.pk]
+        while stack:
+            node = stack.pop()
+            if node == task.pk:
                 return True
+            if node in seen:
+                continue
             seen.add(node)
-            node = dependency_map.get(node)
+            stack.extend(dependency_map.get(node, []))
         return False
 
     for stage in stages:
@@ -663,7 +764,12 @@ def _annotate_stage_permissions(product, stages, user):
                 is_admin or is_product_owner
                 or stage.assignee == user
             )
-            # 前置任务可以来自任意阶段；排除自身和会形成环的候选
+            # 执行人本人不能改任务负责人（避免自己转派/摘掉自己）
+            task.can_manage_assignee = task.can_manage_time
+            # 前置任务可以来自任意阶段、可以选多个；排除自身和会形成环的候选
+            task.predecessor_ids = {
+                p.pk for p in task.depends_on.all()
+            }
             task.predecessor_groups = [
                 {
                     'stage': group['stage'],
@@ -1232,9 +1338,12 @@ def stage_add_task(request, stage_id):
         return JsonResponse({'error': '任务名不能为空'}, status=400)
     # 计算排序号
     max_order = stage.tasks.aggregate(m=models.Max('order'))['m'] or 0
+    # 立项阶段（第一阶段）新增子任务默认归阶段负责人，后续阶段不预设
+    first_stage = product.stages.order_by('order').first()
+    default_assignee = stage.assignee if first_stage and first_stage.pk == stage.pk else None
     task = Task.objects.create(
         product_stage=stage, name=name, order=max_order + 1,
-        status='pending',
+        status='pending', assignee=default_assignee,
     )
     log_action(request.user, '添加任务', 'task', task.id,
                f'{stage.product.name} / {task.name}',
@@ -1381,13 +1490,12 @@ def stage_update_field(request, stage_id):
 
     if field == 'assignee':
         old_val = stage.assignee.username if stage.assignee else '无'
-        if value:
-            try:
-                stage.assignee = User.objects.get(pk=int(value))
-            except (User.DoesNotExist, ValueError):
-                stage.assignee = None
-        else:
-            stage.assignee = None
+        if not value:
+            return JsonResponse({'error': '阶段负责人不能为空'}, status=400)
+        try:
+            stage.assignee = User.objects.get(pk=int(value), is_active=True)
+        except (User.DoesNotExist, ValueError):
+            return JsonResponse({'error': '阶段负责人无效'}, status=400)
         new_val = stage.assignee.username if stage.assignee else '无'
     elif field == 'started_at':
         old_val = stage.started_at.strftime('%Y-%m-%d') if stage.started_at else '无'
@@ -1419,7 +1527,7 @@ def stage_update_field(request, stage_id):
     stage.save()
     if field == 'assignee':
         _notify_new_assignee(stage, old_assignee, stage.assignee, request.user,
-                             f'「{product.name} · {stage.name}」阶段')
+                             f'“{product.name} · {stage.name}”阶段')
     stage.sync_auto_todo()
     field_label = field_label_map.get(field, field)
     log_action(request.user, '修改阶段', 'stage', stage.id,
@@ -1489,7 +1597,7 @@ def product_cancel(request, pk):
     if not product.actual_end_date:
         product.actual_end_date = timezone.now()
     product.save()
-    product.sync_auto_todo()
+    product.sync_all_auto_todos()
     log_action(request.user, '取消品', 'product', product.id, product.name,
                f'状态: {product.get_status_display()} → 已取消')
     messages.success(request, f'"{product.name}" 已取消。')
@@ -1504,18 +1612,26 @@ def task_update_field(request, task_id):
     if not _check_task_permission(request.user, task):
         return JsonResponse({'error': '无权限操作此任务'}, status=403)
 
-    # 时间字段和前置任务只有管理员/品负责人/阶段负责人能改
-    time_fields = {'started_at', 'expected_end_date', 'deadline'}
+    # 时间字段、前置任务和执行人只有管理员/品负责人/阶段负责人能改。
+    # 执行人本人虽然能操作自己的任务（完成任务、传附件），但不能改「负责人」——
+    # 否则可以自己把任务转派给别人或把自己摘掉。
+    managed_fields = {'started_at', 'expected_end_date', 'deadline',
+                      'predecessor', 'assignee'}
     field = request.POST.get('field', '')
-    if field in time_fields or field == 'predecessor':
+    if field in managed_fields:
         product = task.product_stage.product
         stage = task.product_stage
-        can_manage_time = (
+        can_manage_fields = (
             request.user.profile.is_admin
             or product.assignee == request.user
             or stage.assignee == request.user
         )
-        if not can_manage_time:
+        if not can_manage_fields:
+            if field == 'assignee':
+                return JsonResponse(
+                    {'error': '只有管理员、品负责人或阶段负责人可以修改执行人'},
+                    status=403,
+                )
             return JsonResponse({'error': '无权限修改时间字段'}, status=403)
 
     field = request.POST.get('field', '')
@@ -1576,12 +1692,16 @@ def task_update_field(request, task_id):
             task.assignee = None
         new_val = task.assignee.username if task.assignee else '无'
     elif field == 'predecessor':
-        old_val = task.depends_on.name if task.depends_on_id else '无'
-        predecessor = None
-        if value:
+        old_names = [p.name for p in task.depends_on.all()]
+        old_val = '、'.join(old_names) if old_names else '无'
+        # 多选：value 是逗号分隔的任务 id（单选时也兼容）
+        raw_ids = [part for part in value.split(',') if part.strip()]
+        predecessors = []
+        seen_ids = set()
+        for raw_id in raw_ids:
             try:
-                predecessor = Task.objects.select_related('depends_on').get(
-                    pk=int(value), product_stage__product=stage.product,
+                predecessor = Task.objects.prefetch_related('depends_on').get(
+                    pk=int(raw_id), product_stage__product=stage.product,
                 )
             except (Task.DoesNotExist, ValueError):
                 return JsonResponse({
@@ -1589,7 +1709,9 @@ def task_update_field(request, task_id):
                 }, status=400)
             if predecessor.pk == task.pk:
                 return JsonResponse({'error': '前置任务不能是任务自身'}, status=400)
-            if task.creates_dependency_cycle(predecessor):
+            if predecessor.pk in seen_ids:
+                continue
+            if task.creates_dependency_cycle([predecessor]):
                 return JsonResponse({
                     'error': f'「{predecessor.name}」已直接或间接依赖此任务，不能设为前置任务',
                 }, status=400)
@@ -1597,13 +1719,15 @@ def task_update_field(request, task_id):
                 return JsonResponse({
                     'error': '已完成的任务不能设置未完成的前置任务',
                 }, status=400)
+            seen_ids.add(predecessor.pk)
+            predecessors.append(predecessor)
 
-        task.depends_on = predecessor
-        # 前置任务未完成时，任务不能开始：清掉已有的开始时间，状态回到待开始。
-        # 等前置任务完成时再自动补开始/结束时间。
+        task.depends_on.set(predecessors)
+        # 前置任务未全部完成时，任务不能开始：清掉已有的开始时间，状态回到待开始。
+        # 等最后一个前置任务完成时再自动补开始/结束时间。
         if task.is_blocked:
             task.started_at = None
-        new_val = predecessor.name if predecessor else '无'
+        new_val = '、'.join(p.name for p in predecessors) if predecessors else '无'
     else:
         return JsonResponse({'error': f'不支持的字段: {field}'}, status=400)
 
@@ -1615,7 +1739,7 @@ def task_update_field(request, task_id):
         product = task.product_stage.product
         stage = task.product_stage
         _notify_new_assignee(task, old_assignee, task.assignee, request.user,
-                             f'「{product.name} · {stage.name} · {task.name}」任务')
+                             f'“{product.name} · {stage.name} · {task.name}”任务')
     # 时间字段变更后，状态可能随之改变（如设了已过期的预计结束日期），立即重算并一并返回
     task.update_status()
     task.sync_auto_todo()
@@ -1689,7 +1813,7 @@ def product_update_field(request, pk):
     product.save()
     if field == 'assignee':
         _notify_new_assignee(product, old_assignee, product.assignee, request.user,
-                             f'「{product.name}」项目总负责人')
+                             f'“{product.name}”项目总负责人')
     product.sync_auto_todo()
     log_action(request.user, '修改品', 'product', product.id, product.name, detail)
     return JsonResponse({'success': True})

@@ -158,6 +158,21 @@ function validateDateOrder(el) {
 // key = 元素引用，value = { url, field, value }
 const DIRTY_FIELDS = new Map();
 
+// 多选 <select>（如前置任务）的值用逗号拼接，后端按逗号拆开；单选框保持原样
+function selectValue(el) {
+    if (!el.multiple) return el.value;
+    return Array.from(el.selectedOptions).map(o => o.value).join(',');
+}
+
+function setSelectValue(el, value) {
+    if (!el.multiple) {
+        el.value = value || '';
+        return;
+    }
+    const wanted = new Set((value || '').split(',').filter(Boolean));
+    Array.from(el.options).forEach(o => { o.selected = wanted.has(o.value); });
+}
+
 function markDirty(el, url, field, value) {
     DIRTY_FIELDS.set(el, { url, field, value });
     el.classList.add('is-dirty');
@@ -335,16 +350,67 @@ function bindFieldHandlers(root = document) {
 
     // 任务字段变更（非用户搜索）
     root.querySelectorAll('.task-field:not(.user-search)').forEach(el => {
-        el._prevValue = el.value;
+        el._prevValue = selectValue(el);
         el.addEventListener('change', function() {
             const taskId = this.dataset.taskId;
             const field = this.dataset.field;
             if ((field === 'started_at' || field === 'expected_end_date') && !validateDateOrder(this)) {
-                this.value = this._prevValue || '';
+                setSelectValue(this, this._prevValue);
                 return;
             }
-            this._prevValue = this.value;
-            markDirty(this, `/products/tasks/${taskId}/update-field/`, field, this.value);
+            const value = selectValue(this);
+            this._prevValue = value;
+            markDirty(this, `/products/tasks/${taskId}/update-field/`, field, value);
+        });
+    });
+
+    // 前置任务多选下拉：勾选后立即登记为 dirty，点「保存并刷新」时统一提交
+    root.querySelectorAll('.pred-dropdown').forEach(el => {
+        const toggle = el.querySelector('.pred-toggle');
+        const menu = el.querySelector('.pred-menu');
+        const label = el.querySelector('.pred-label');
+        if (!toggle || !menu || !label) return;
+
+        const taskId = el.dataset.taskId;
+        const checkedBoxes = () => Array.from(
+            menu.querySelectorAll('input[type=checkbox]:checked')
+        );
+        const refreshLabel = () => {
+            const checked = checkedBoxes();
+            label.textContent = checked.length
+                ? checked.map(cb => cb.dataset.name).join('、')
+                : '无';
+            label.style.color = checked.length ? '' : 'var(--muted)';
+        };
+
+        toggle.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const willOpen = menu.hidden;
+            closePredecessorMenus();
+            if (!willOpen) return;
+
+            menu.hidden = false;
+            // fixed 定位，避免被弹窗/表格的 overflow 裁掉；打开后再量高度决定向上还是向下弹
+            const rect = toggle.getBoundingClientRect();
+            menu.style.left = `${rect.left}px`;
+            menu.style.top = `${rect.bottom + 4}px`;
+            menu.style.width = `${Math.max(rect.width, 220)}px`;
+            const menuRect = menu.getBoundingClientRect();
+            if (menuRect.bottom > window.innerHeight - 8) {
+                menu.style.top = `${Math.max(8, rect.top - menuRect.height - 4)}px`;
+            }
+        });
+
+        menu.addEventListener('change', function(e) {
+            if (!e.target.matches('input[type=checkbox]')) return;
+            refreshLabel();
+            markDirty(
+                el,
+                `/products/tasks/${taskId}/update-field/`,
+                'predecessor',
+                checkedBoxes().map(cb => cb.value).join(','),
+            );
         });
     });
 
@@ -391,6 +457,24 @@ function bindFieldHandlers(root = document) {
         });
     });
 }
+
+// 关闭所有前置任务下拉（点击别处、滚动、缩放时调用）
+function closePredecessorMenus() {
+    document.querySelectorAll('.pred-menu:not([hidden])').forEach(menu => {
+        menu.hidden = true;
+    });
+}
+
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('.pred-dropdown')) closePredecessorMenus();
+});
+// 下拉用 fixed 定位，页面/弹窗一滚就和按钮错位了，直接收起最省事；
+// 但菜单自己内部滚动不能关（长列表要能翻）
+document.addEventListener('scroll', function(e) {
+    if (e.target.closest && e.target.closest('.pred-menu')) return;
+    closePredecessorMenus();
+}, true);
+window.addEventListener('resize', closePredecessorMenus);
 
 document.addEventListener('DOMContentLoaded', () => {
     // 预构建用户映射

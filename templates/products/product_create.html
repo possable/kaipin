@@ -4,63 +4,287 @@
 <div class="page-card" style="max-width:920px;">
     <h2 class="page-title">创建新品</h2>
     {% if has_templates %}
-    <form method="post" id="create-form">
+    {# 没有 JS 时把两步都摊开，至少还能提交 #}
+    <noscript><style>#create-step-2[hidden] { display: block !important; }</style></noscript>
+    <form method="post" id="create-form" data-initial-step="{{ form_step|default:1 }}">
         {% csrf_token %}
-        <div class="form-group">
-            <label class="form-label">品名 <span style="color:var(--red);">*</span></label>
-            <input type="text" name="name" class="form-input"
-                   placeholder="输入新品名称，如：维C泡腾片2026款" required autofocus
-                   value="{{ form_name|default:'' }}">
+        <div id="create-form-error" class="alert alert-danger" hidden></div>
+
+        {# 第 1 步：项目信息 #}
+        <div id="create-step-1">
+            <div class="form-group">
+                <label class="form-label">品名 <span style="color:var(--red);">*</span></label>
+                <input type="text" name="name" class="form-input"
+                       placeholder="输入新品名称，如：维C泡腾片2026款" required autofocus
+                       value="{{ form_name|default:'' }}">
+            </div>
+            <div class="form-group">
+                <label class="form-label">总负责人 <span style="color:var(--red);">*</span></label>
+                <input type="text" class="form-input user-search" list="users-datalist" id="assignee-search"
+                       data-hidden-target="assignee-id"
+                       placeholder="搜索总负责人..." autocomplete="off" required
+                       value="{{ form_assignee_name|default:'' }}">
+                <input type="hidden" name="assignee" id="assignee-id" value="{{ form_assignee_id|default:'' }}">
+                <datalist id="users-datalist">
+                    {% for u in all_users %}
+                    <option value="{{ u.first_name|default:u.username }}" data-id="{{ u.id }}">
+                    {% endfor %}
+                </datalist>
+            </div>
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label class="form-label">项目开始时间 <span style="color:var(--red);">*</span></label>
+                        <input type="date" name="started_at" id="form-started-at" class="form-input" required
+                               value="{{ form_started_at|default:'' }}">
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label class="form-label">项目预计结束时间 <span style="color:var(--red);">*</span></label>
+                        <input type="date" name="expected_end_date" id="form-expected-end" class="form-input" required
+                               value="{{ form_expected_end_date|default:'' }}">
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">产品资料（<span style="color:var(--red);">*</span> 为必填，其余可创建后再补充）</label>
+            </div>
+            {% include 'products/_product_profile_fields.html' %}
+
+            <div style="display:flex;gap:8px;margin-top:20px;justify-content:center;">
+                <button type="button" class="btn btn-primary" id="step1-next">
+                    下一步 <i class="bi bi-arrow-right"></i>
+                </button>
+                <a href="{% url 'kanban' %}" class="btn btn-outline">取消</a>
+            </div>
         </div>
-        <div class="form-group">
-            <label class="form-label">总负责人 <span style="color:var(--red);">*</span></label>
-            <input type="text" class="form-input user-search" list="users-datalist" id="assignee-search"
-                   placeholder="搜索总负责人..." autocomplete="off" required>
-            <input type="hidden" name="assignee" id="assignee-id" value="{{ form_assignee_id|default:'' }}">
-            <datalist id="users-datalist">
-                {% for u in all_users %}
-                <option value="{{ u.first_name|default:u.username }}" data-id="{{ u.id }}">
+
+        {# 第 2 步：各阶段负责人和起止时间，填完才能创建 #}
+        <div id="create-step-2"{% if form_step != 2 %} hidden{% endif %}>
+            <p class="setup-intro">
+                第 2 步：为每个阶段指定负责人（必填）和起止时间。
+                起止时间可以先留空，创建后在项目详情里补填。
+            </p>
+            <table class="setup-table">
+                <thead>
+                    <tr>
+                        <th>阶段</th>
+                        <th>阶段负责人 <span style="color:var(--red);">*</span></th>
+                        <th>开始时间</th>
+                        <th>结束时间</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for row in stage_rows %}
+                    <tr data-stage-row data-stage-name="{{ row.template.name }}">
+                        <td>
+                            <strong>{{ row.template.order }}. {{ row.template.name }}</strong>
+                            <div class="setup-dept">{{ row.template.department.name }}</div>
+                        </td>
+                        <td>
+                            <input type="text" class="form-input user-search stage-assignee"
+                                   list="users-datalist" autocomplete="off" required
+                                   data-hidden-target="create-stage-assignee-{{ row.template.pk }}"
+                                   placeholder="输入姓名搜索..."
+                                   value="{{ row.assignee_name }}">
+                            <input type="hidden" name="stage_assignee_{{ row.template.pk }}"
+                                   id="create-stage-assignee-{{ row.template.pk }}"
+                                   value="{{ row.assignee_id }}">
+                        </td>
+                        <td>
+                            <input type="date" class="form-input stage-start"
+                                   name="stage_started_at_{{ row.template.pk }}"
+                                   value="{{ row.started_at }}">
+                        </td>
+                        <td>
+                            <input type="date" class="form-input stage-end"
+                                   name="stage_expected_end_date_{{ row.template.pk }}"
+                                   value="{{ row.expected_end_date }}">
+                        </td>
+                    </tr>
                 {% endfor %}
-            </datalist>
-        </div>
-        <div class="row g-3">
-            <div class="col-md-6">
-                <div class="form-group">
-                    <label class="form-label">项目开始时间 <span style="color:var(--red);">*</span></label>
-                    <input type="date" name="started_at" id="form-started-at" class="form-input" required
-                           value="{{ form_started_at|default:'' }}">
-                </div>
+                </tbody>
+            </table>
+            <div style="display:flex;gap:8px;margin-top:20px;justify-content:center;">
+                <button type="button" class="btn btn-outline" id="step2-back">
+                    <i class="bi bi-arrow-left"></i> 上一步
+                </button>
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-check-lg"></i> 发布项目
+                </button>
             </div>
-            <div class="col-md-6">
-                <div class="form-group">
-                    <label class="form-label">项目预计结束时间 <span style="color:var(--red);">*</span></label>
-                    <input type="date" name="expected_end_date" id="form-expected-end" class="form-input" required
-                           value="{{ form_expected_end_date|default:'' }}">
-                </div>
-            </div>
-        </div>
-
-        <div class="form-group">
-            <label class="form-label">产品资料（<span style="color:var(--red);">*</span> 为必填，其余可创建后再补充）</label>
-        </div>
-        {% include 'products/_product_profile_fields.html' %}
-
-        <div class="form-group">
-            <small class="text-muted">创建后立即发布，项目正式开始，第一个阶段自动进入进行中。</small>
-        </div>
-        <div style="display:flex;gap:8px;margin-top:20px;">
-            <button type="submit" class="btn btn-primary">
-                <i class="bi bi-check-lg"></i> 创建并发布
-            </button>
-            <a href="{% url 'kanban' %}" class="btn btn-outline">取消</a>
         </div>
     </form>
     <script>
-    document.querySelector('.user-search').addEventListener('input', function(){
-        const opts = document.querySelectorAll('#users-datalist option');
-        const hidden = document.getElementById('assignee-id');
-        opts.forEach(o => { if(o.value === this.value) hidden.value = o.dataset.id; });
-    });
+    (function () {
+        const form = document.getElementById('create-form');
+        if (!form) return;
+        const step1 = document.getElementById('create-step-1');
+        const step2 = document.getElementById('create-step-2');
+        const errorBox = document.getElementById('create-form-error');
+
+        // 本页没引 app.js，没有 showToast，用页面内的提示条
+        function showStepError(message) {
+            if (!errorBox) return;
+            errorBox.textContent = message;
+            errorBox.hidden = false;
+            errorBox.scrollIntoView({ block: 'center' });
+        }
+
+        function clearStepError() {
+            if (!errorBox) return;
+            errorBox.textContent = '';
+            errorBox.hidden = true;
+        }
+
+        // 输入的是姓名，提交时后端只认 id：选人面板带出 data-userid 的直接用，
+        // 手工输入的回退到按姓名精确匹配
+        function syncAssignee(input) {
+            const hidden = document.getElementById(input.dataset.hiddenTarget);
+            if (!hidden) return;
+            const name = input.value.trim();
+            let uid = '';
+            if (name) {
+                if (input.dataset.userid) {
+                    const picked = document.querySelector(
+                        '#users-datalist option[data-id="' + input.dataset.userid + '"]'
+                    );
+                    if (picked && picked.value.trim() === name) uid = input.dataset.userid;
+                }
+                if (!uid) {
+                    document.querySelectorAll('#users-datalist option').forEach(function (opt) {
+                        if (opt.value.trim() === name) uid = opt.dataset.id || '';
+                    });
+                }
+            }
+            hidden.value = uid;
+        }
+
+        form.querySelectorAll('.user-search').forEach(function (input) {
+            // 没动过的输入框保留后端/模板给的 id，不按姓名反查（有人同名会取错人）
+            input.addEventListener('input', function () {
+                input.dataset.dirty = '1';
+                syncAssignee(input);
+            });
+        });
+
+        function stageRows() {
+            return form.querySelectorAll('[data-stage-row]');
+        }
+
+        // 第二步的日期范围跟随项目周期
+        function applyDateBounds() {
+            const projectStart = document.getElementById('form-started-at').value;
+            const projectEnd = document.getElementById('form-expected-end').value;
+            form.querySelectorAll('.stage-start, .stage-end').forEach(function (input) {
+                if (projectStart) input.min = projectStart;
+                else input.removeAttribute('min');
+                if (projectEnd) input.max = projectEnd;
+                else input.removeAttribute('max');
+            });
+        }
+
+        function setStep(step) {
+            step1.hidden = step !== 1;
+            step2.hidden = step !== 2;
+            if (step === 2) applyDateBounds();
+        }
+
+        function step1Valid() {
+            const fields = step1.querySelectorAll('input, select, textarea');
+            for (const field of fields) {
+                if (!field.checkValidity()) {
+                    field.reportValidity();
+                    return false;
+                }
+            }
+            // 总负责人必须是人员列表里的人，后端只认隐藏的 id
+            const ownerInput = document.getElementById('assignee-search');
+            const ownerHidden = document.getElementById('assignee-id');
+            if (ownerInput.dataset.dirty === '1') syncAssignee(ownerInput);
+            if (!ownerHidden.value) {
+                setStep(1);
+                showStepError('总负责人没填或不在人员列表里，请重新选择');
+                ownerInput.focus();
+                return false;
+            }
+            return true;
+        }
+
+        // 阶段负责人必填，且必须是人员列表里的人
+        function missingAssigneeRow() {
+            for (const row of stageRows()) {
+                const input = row.querySelector('.stage-assignee');
+                if (input.dataset.dirty === '1') syncAssignee(input);
+                const hidden = document.getElementById(input.dataset.hiddenTarget);
+                if (!input.value.trim() || !hidden || !hidden.value) return row;
+            }
+            return null;
+        }
+
+        form.addEventListener('input', clearStepError);
+
+        document.getElementById('step1-next').addEventListener('click', function () {
+            clearStepError();
+            if (!step1Valid()) return;
+            setStep(2);
+            const first = step2.querySelector('.stage-assignee');
+            if (first) first.focus();
+        });
+
+        document.getElementById('step2-back').addEventListener('click', function () {
+            clearStepError();
+            setStep(1);
+        });
+
+        form.addEventListener('submit', function (event) {
+            if (!step1Valid()) {
+                event.preventDefault();
+                return;
+            }
+            const missing = missingAssigneeRow();
+            if (missing) {
+                event.preventDefault();
+                setStep(2);
+                const input = missing.querySelector('.stage-assignee');
+                showStepError(`「${missing.dataset.stageName}」的阶段负责人没填或不在人员列表里，请重新选择`);
+                if (input) input.focus();
+                return;
+            }
+            for (const row of stageRows()) {
+                const start = row.querySelector('.stage-start').value;
+                const end = row.querySelector('.stage-end').value;
+                if (start && end && start > end) {
+                    event.preventDefault();
+                    setStep(2);
+                    showStepError(`「${row.dataset.stageName}」的开始时间不能晚于结束时间`);
+                    return;
+                }
+            }
+        });
+
+        // 创建接口要发立项通知，可能要几秒；提交后禁用按钮，防止连续点击建出多个项目
+        form.addEventListener('submit', function (event) {
+            if (event.defaultPrevented) return;
+            const btn = form.querySelector('#create-step-2 button[type="submit"]');
+            if (!btn || btn.disabled) return;
+            btn.dataset.originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<i class="bi bi-hourglass-split"></i> 发布中...';
+        });
+        window.addEventListener('pageshow', function () {
+            const btn = form.querySelector('#create-step-2 button[type="submit"]');
+            if (btn && btn.disabled) {
+                btn.disabled = false;
+                if (btn.dataset.originalHtml) btn.innerHTML = btn.dataset.originalHtml;
+            }
+        });
+
+        // 校验失败重渲染时直接停在出错的那一步
+        if (form.dataset.initialStep === '2') setStep(2);
+    })();
     </script>
     {% else %}
     <div class="alert alert-warning">

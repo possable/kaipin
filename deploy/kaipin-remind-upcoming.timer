@@ -1,0 +1,15 @@
+# 放到 /etc/systemd/system/kaipin-remind-upcoming.timer
+# 启用：systemctl daemon-reload && systemctl enable --now kaipin-remind-upcoming.timer
+
+[Unit]
+Description=工作日 14:30 触发 Kaipin 到期前提醒扫描
+
+[Timer]
+# 提前预警只在工作日下午 14:30 发布，周末不触发
+# Persistent=false：错过 14:30 就不补发，避免半夜/清晨突然发提醒
+OnCalendar=Mon-Fri 14:30:00
+Persistent=false
+Unit=kaipin-remind-upcoming.service
+
+[Install]
+WantedBy=timers.target

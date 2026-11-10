@@ -14,6 +14,18 @@ from reminders.scheduler import scan_and_remind
 class Command(BaseCommand):
     help = '扫描进行中项目的任务，发送临近/超期提醒并做阶段、品的超期聚合通知'
 
+    def add_arguments(self, parser):
+        parser.add_argument(
+            '--mode', choices=['all', 'advance', 'other'], default='all',
+            help=(
+                'all=全部提醒（默认，手动执行用）；'
+                'advance=只发到期前提醒（工作日 14:30）；'
+                'other=只发超期/信息缺失等其余提醒（每日 09:00）'
+            ),
+        )
+
     def handle(self, *args, **options):
-        sent = scan_and_remind()
-        self.stdout.write(self.style.SUCCESS(f'提醒扫描完成，发送 {sent} 条任务提醒'))
+        sent = scan_and_remind(mode=options['mode'])
+        self.stdout.write(self.style.SUCCESS(
+            f'提醒扫描完成（{options["mode"]}），发送 {sent} 条任务提醒'
+        ))

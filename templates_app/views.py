@@ -41,41 +41,49 @@ def _get_stage_post_data(request):
     }, None
 
 
-def _task_template_would_cycle(task, predecessor):
-    """把 predecessor 设为 task 的前置模板，是否会形成环。"""
+def _task_template_would_cycle(task, predecessors):
+    """把 predecessors 都设为 task 的前置模板，是否会形成环。"""
     seen = set()
-    node = predecessor
-    while node is not None:
-        if node.pk == task.pk or node.pk in seen:
+    stack = list(predecessors)
+    while stack:
+        node = stack.pop()
+        if node.pk == task.pk:
             return True
+        if node.pk in seen:
+            continue
         seen.add(node.pk)
-        node = node.depends_on
+        stack.extend(node.depends_on.all())
     return False
 
 
 def _task_predecessor_groups(task=None):
     """子任务模板的前置候选，按阶段分组。
 
-    前置任务可以跨阶段；编辑时排除自身和会形成环的候选。
+    前置任务可以跨阶段、可以多选；编辑时排除自身和会形成环的候选。
     新建时还没有自身，所有已有模板都可以选。
     """
     all_tasks = list(
-        TaskTemplate.objects.select_related(
-            'stage_template', 'depends_on',
-        ).order_by('stage_template__order', 'order', 'id')
+        TaskTemplate.objects.select_related('stage_template')
+        .prefetch_related('depends_on')
+        .order_by('stage_template__order', 'order', 'id')
     )
-    dependency_map = {t.pk: t.depends_on_id for t in all_tasks}
+    dependency_map = {
+        t.pk: [p.pk for p in t.depends_on.all()] for t in all_tasks
+    }
 
     def _would_cycle(candidate):
         if task is None:
             return False
         seen = set()
-        node = candidate.pk
-        while node is not None:
-            if node == task.pk or node in seen:
+        stack = [candidate.pk]
+        while stack:
+            node = stack.pop()
+            if node == task.pk:
                 return True
+            if node in seen:
+                continue
             seen.add(node)
-            node = dependency_map.get(node)
+            stack.extend(dependency_map.get(node, []))
         return False
 
     groups = {}
@@ -97,25 +105,36 @@ def _get_task_post_data(request, task=None):
     name = request.POST.get('name', '').strip()
     order_str = request.POST.get('order', '0').strip()
     is_milestone = 'is_milestone' in request.POST
-    depends_on_id = request.POST.get('depends_on', '').strip()
+    # 多选；也兼容只传一个值的旧表单
+    depends_on_ids = request.POST.getlist('depends_on')
 
     if not name:
         return None, '任务名称不能为空'
     order = int(order_str) if order_str.isdigit() else 0
 
-    depends_on = None
-    if depends_on_id:
+    depends_on = []
+    seen_ids = set()
+    for depends_on_id in depends_on_ids:
+        depends_on_id = depends_on_id.strip()
+        if not depends_on_id:
+            continue
         try:
-            depends_on = TaskTemplate.objects.select_related('depends_on').get(
+            predecessor = TaskTemplate.objects.prefetch_related('depends_on').get(
                 pk=int(depends_on_id),
             )
         except (TaskTemplate.DoesNotExist, ValueError):
             return None, '所选前置任务不存在'
+        if predecessor.pk in seen_ids:
+            continue
         if task is not None:
-            if depends_on.pk == task.pk:
+            if predecessor.pk == task.pk:
                 return None, '前置任务不能是任务自身'
-            if _task_template_would_cycle(task, depends_on):
-                return None, f'「{depends_on.name}」已直接或间接依赖此任务，不能设为前置任务'
+            if _task_template_would_cycle(task, [predecessor]):
+                return None, (
+                    f'「{predecessor.name}」已直接或间接依赖此任务，不能设为前置任务'
+                )
+        seen_ids.add(predecessor.pk)
+        depends_on.append(predecessor)
 
     return {
         'name': name,
@@ -209,7 +228,7 @@ def stage_template_delete(request, pk):
 @admin_required
 def task_template_list(request, stage_pk):
     stage = get_object_or_404(StageTemplate, pk=stage_pk)
-    tasks = stage.task_templates.select_related(
+    tasks = stage.task_templates.prefetch_related(
         'depends_on__stage_template',
     ).all()
     return render(request, 'templates_app/task_template_list.html', {
@@ -226,12 +245,15 @@ def task_template_create(request, stage_pk):
         if error:
             messages.error(request, error)
         else:
-            TaskTemplate.objects.create(stage_template=stage, **data)
+            depends_on = data.pop('depends_on')
+            task = TaskTemplate.objects.create(stage_template=stage, **data)
+            task.depends_on.set(depends_on)
             messages.success(request, f'子任务 "{data["name"]}" 已添加。')
             return redirect('task_template_list', stage_pk=stage.pk)
     return render(request, 'templates_app/task_template_form.html', {
         'stage': stage,
         'predecessor_groups': _task_predecessor_groups(),
+        'selected_predecessor_ids': set(),
         'action': '添加',
     })
 
@@ -244,17 +266,21 @@ def task_template_edit(request, pk):
         if error:
             messages.error(request, error)
         else:
+            depends_on = data.pop('depends_on')
             task.name = data['name']
             task.order = data['order']
             task.is_milestone = data['is_milestone']
-            task.depends_on = data['depends_on']
             task.save()
+            task.depends_on.set(depends_on)
             messages.success(request, f'子任务 "{task.name}" 已更新。')
             return redirect('task_template_list', stage_pk=task.stage_template.pk)
     return render(request, 'templates_app/task_template_form.html', {
         'task': task,
         'stage': task.stage_template,
         'predecessor_groups': _task_predecessor_groups(task),
+        'selected_predecessor_ids': set(
+            task.depends_on.values_list('pk', flat=True)
+        ),
         'action': '编辑',
     })
 
