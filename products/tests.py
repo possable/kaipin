@@ -651,7 +651,15 @@ class UpwardNotificationTriggerTest(TestCase):
         self.task.mark_completed()
         mock_send.reset_mock()
         self.stage.complete()
-        mock_send.assert_called_once()
+
+        contents = [c[0][1] for c in mock_send.call_args_list]
+        # 阶段完成通知品负责人
+        self.assertTrue(any(
+            c.startswith('品负责人2你好') and '“触发测试阶段”阶段已完成' in c
+            for c in contents
+        ))
+        # 这是最后一个阶段，项目随之完成，相关人都会收到项目完成通知
+        self.assertTrue(any('恭喜触发测试品项目已顺利完成' in c for c in contents))
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
     def test_last_stage_complete_triggers_product_notify_to_admins(self, mock_send):

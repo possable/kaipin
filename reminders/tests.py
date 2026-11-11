@@ -282,16 +282,15 @@ class StageOverdueAggregationTest(TestCase):
         content = calls[0][0][1]
         self.assertIn('你负责的 3 个品存在超期任务', content)
         for p_idx in (1, 2, 3):
-            self.assertIn(f'“阶段聚合品{p_idx}”', content)
+            self.assertIn(f'{p_idx}. 阶段聚合品{p_idx}', content)
             # 同一个品下的两个阶段合并到同一行，并带阶段负责人
             self.assertIn(
                 f'超期阶段：阶段{p_idx}-1（未指定）、阶段{p_idx}-2（未指定）',
                 content,
             )
-            # 精准到超期任务名和执行人，格式与管理员汇总一致
+            # 精准到超期任务名，格式与管理员汇总一致
             self.assertIn(
-                f'超期任务：“任务{p_idx}-1”未指定、“任务{p_idx}-2”未指定',
-                content,
+                f'超期任务：任务{p_idx}-1、任务{p_idx}-2', content,
             )
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
@@ -403,21 +402,19 @@ class ProductOverdueAggregationTest(TestCase):
         scan_and_remind()
 
         content = [c for c in mock_send.call_args_list if c[0][0] == 'wx_admin1'][0][0][1]
-        # 品名一行，不带数量后缀
-        self.assertIn('“聚合超期品1”', content)
+        # 品名一行，不带引号和数量后缀
+        self.assertIn('聚合超期品1', content)
         self.assertNotIn('“聚合超期品1”（', content)
-        # 阶段只列名称和负责人，任务行列任务名和执行人
+        # 阶段只列名称和负责人，任务行只列任务名
         self.assertIn(
             '超期阶段：聚合阶段1（阶段负责人甲）、聚合阶段1-2（阶段负责人甲）',
             content,
         )
         self.assertIn('超期阶段：聚合阶段2（阶段负责人乙）', content)
         self.assertIn(
-            '超期任务：“聚合任务1”阶段负责人甲、'
-            '“聚合任务1-2”阶段负责人甲、“聚合任务1-3”阶段负责人甲',
-            content,
+            '超期任务：聚合任务1、聚合任务1-2、聚合任务1-3', content,
         )
-        self.assertIn('超期任务：“聚合任务2”阶段负责人乙', content)
+        self.assertIn('超期任务：聚合任务2', content)
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
     def test_unassigned_stage_shows_placeholder(self, mock_send):
@@ -640,17 +637,33 @@ class NotifyUpwardTest(TestCase):
             self.fail('notify_upward 不应向外抛出异常')
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
-    def test_product_completed_notifies_all_admins(self, mock_send):
+    def test_product_completed_notifies_all_related_users(self, mock_send):
+        """项目完成通知发给管理员、项目/阶段/任务负责人和创建人，操作人本人也收。"""
         admin1 = User.objects.create(username='admin1', first_name='管理员一')
         admin1.profile.wechat_userid = 'wx_admin1'
         # UserProfile.is_admin 是基于 role 字段的只读 property（role == 'admin'）
         admin1.profile.role = 'admin'
         admin1.profile.save()
 
+        self.task_assignee.profile.wechat_userid = 'wx_task_worker'
+        self.task_assignee.profile.save()
+
+        self.product.started_at = timezone.now() - timedelta(days=5)
+        self.product.actual_end_date = timezone.now()
+        self.product.save(update_fields=['started_at', 'actual_end_date'])
+
         notify_upward(self.product, 'completed', actor=self.product_owner)
-        mock_send.assert_called_once()
-        called_userid, called_content = mock_send.call_args[0]
-        self.assertEqual(called_userid, 'wx_admin1')
+
+        called = [c[0][0] for c in mock_send.call_args_list]
+        self.assertEqual(
+            set(called),
+            {'wx_admin1', 'wx_product_owner', 'wx_stage_owner', 'wx_task_worker'},
+        )
+        contents = [c[0][1] for c in mock_send.call_args_list]
+        for content in contents:
+            self.assertTrue(content.startswith('您好，我是项目管理智能机器人。'))
+            self.assertIn('恭喜测试品项目已顺利完成，用时5天。', content)
+            self.assertIn('如需了解详情，可在“项目归档”页面查看。', content)
 
     def test_one_recipient_failure_does_not_block_others(self):
         """多个收件人场景下，其中一个发送失败（抛异常）不应影响其他收件人正常收到通知，
@@ -688,8 +701,11 @@ class NotifyUpwardTest(TestCase):
             called_userids = [call.args[0] for call in mock_send.call_args_list]
             self.assertIn('wx_admin1', called_userids)
             self.assertIn('wx_admin2', called_userids)
-            # 关键断言：失败的那个之外，另一个必须真的发出去了
-            self.assertEqual(delivered, ['wx_admin2'])
+            # 关键断言：失败的那个之外，其他人必须真的发出去了
+            self.assertIn('wx_admin2', delivered)
+            self.assertIn('wx_product_owner', delivered)
+            self.assertIn('wx_stage_owner', delivered)
+            self.assertNotIn('wx_admin1', delivered)
 
 
 class StageOwnerOverdueAggregationTest(TestCase):
@@ -740,18 +756,21 @@ class StageOwnerOverdueAggregationTest(TestCase):
         self.assertEqual(len(calls1), 1, '一个人负责多个阶段也只发一条')
         content1 = calls1[0][0][1]
         self.assertIn('你负责的 2 个阶段存在超期任务', content1)
-        self.assertIn('“阶段负责人测试品”·“包装设计”（2 个超期任务）', content1)
-        self.assertIn('“阶段负责人测试品”·“营销策划”（1 个超期任务）', content1)
+        self.assertIn('1. 阶段负责人测试品', content1)
+        self.assertIn(
+            '超期阶段：包装设计（阶段负责人甲）、营销策划（阶段负责人甲）',
+            content1,
+        )
         # 具体到超期任务名
-        self.assertIn('“包装设计任务1”、“包装设计任务2”', content1)
-        self.assertIn('“营销策划任务1”', content1)
+        self.assertIn('超期任务：包装设计任务1、包装设计任务2、营销策划任务1', content1)
 
         calls2 = [c for c in mock_send.call_args_list if c[0][0] == 'wx_stage_owner2']
         self.assertEqual(len(calls2), 1)
         content2 = calls2[0][0][1]
-        self.assertIn('“阶段负责人测试品”·“产品生产”（3 个超期任务）', content2)
+        self.assertIn('1. 阶段负责人测试品', content2)
+        self.assertIn('超期阶段：产品生产（阶段负责人乙）', content2)
         self.assertIn(
-            '“产品生产任务1”、“产品生产任务2”、“产品生产任务3”', content2,
+            '超期任务：产品生产任务1、产品生产任务2、产品生产任务3', content2,
         )
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
@@ -1374,17 +1393,17 @@ class LiangZiAngAllOverdueRolesTest(TestCase):
         # 2) 阶段负责人：品B 的超期阶段汇总
         stage_owner = [m for m in contents if '你负责的 1 个阶段存在超期任务' in m]
         self.assertEqual(len(stage_owner), 1, contents)
-        self.assertIn('“角色测试品B”·“设计”（1 个超期任务）', stage_owner[0])
-        self.assertIn('“设计任务1”', stage_owner[0])
+        self.assertIn('1. 角色测试品B', stage_owner[0])
+        self.assertIn('超期阶段：设计（梁子昂）', stage_owner[0])
+        self.assertIn('超期任务：设计任务1', stage_owner[0])
 
         # 3) 项目负责人：品A 的超期阶段汇总（含具体超期任务名）
         product_owner = [m for m in contents if '你负责的 1 个品存在超期任务' in m]
         self.assertEqual(len(product_owner), 1, contents)
-        self.assertIn('“角色测试品A”', product_owner[0])
+        self.assertIn('1. 角色测试品A', product_owner[0])
         self.assertIn('超期阶段：策划（策划同事）', product_owner[0])
         self.assertIn(
-            '超期任务：“执行人视角任务”梁子昂、“执行人视角任务2”梁子昂、'
-            '“策划任务1”策划同事',
+            '超期任务：执行人视角任务、执行人视角任务2、策划任务1',
             product_owner[0],
         )
 
@@ -1394,11 +1413,9 @@ class LiangZiAngAllOverdueRolesTest(TestCase):
         self.assertIn('超期阶段：策划（策划同事）', admin[0])
         self.assertIn('超期阶段：设计（梁子昂）', admin[0])
         self.assertIn(
-            '超期任务：“执行人视角任务”梁子昂、“执行人视角任务2”梁子昂、'
-            '“策划任务1”策划同事',
-            admin[0],
+            '超期任务：执行人视角任务、执行人视角任务2、策划任务1', admin[0],
         )
-        self.assertIn('超期任务：“设计任务1”设计同事', admin[0])
+        self.assertIn('超期任务：设计任务1', admin[0])
 
     @patch('reminders.wechat.send_wechat_message', return_value=True)
     def test_second_scan_same_day_sends_nothing_new_to_liangziang(self, mock_send):
