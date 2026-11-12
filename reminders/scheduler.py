@@ -53,7 +53,7 @@ def scan_and_remind(mode='all'):
 
     mode 用来把两类提醒拆到不同时间发：
     - 'advance'：只发到期前提醒（子任务、阶段、品的 D-3~D-1），工作日 14:30
-    - 'other'：只发超期提醒、信息缺失提醒和超期汇总，每日 09:00
+    - 'other'：只发超期提醒、信息缺失提醒和超期汇总，每日 09:30
     - 'all'：全部（手动执行 / 测试）
     """
     if mode not in ('all', 'advance', 'other'):
@@ -164,7 +164,7 @@ def scan_and_remind(mode='all'):
         if len(items) == 1:
             task, product_name, stage_name, end_date_str, days_left = items[0]
             situation = (
-                f'你负责的“{product_name}”项目，在“{stage_name}”阶段的'
+                f'您负责的“{product_name}”项目，在“{stage_name}”阶段的'
                 f'“{task.name}”事项，预计 {end_date_str} 完成，'
                 f'但已超期 {abs(days_left)} 天，请尽快处理！'
             )
@@ -176,7 +176,7 @@ def scan_and_remind(mode='all'):
                 in enumerate(items, 1)
             ]
             situation = (
-                f'你有 {len(items)} 个事项已超期，请尽快处理：\n'
+                f'您有 {len(items)} 个事项已超期，请尽快处理：\n'
                 + '\n'.join(lines)
             )
 
@@ -388,7 +388,7 @@ def scan_and_remind(mode='all'):
     #
     # 这里**先收集再一次性发送**：原先是逐品调用 notify_upward(product, ...)，
     # 每个管理员每个超期品各收一条，6 个品超期就是 6 条几乎一样的消息、且每天重复。
-    # 改成把当天新超期的品聚合成一条「你有 N 个品超期」。
+    # 改成把当天新超期的品聚合成一条「您有 N 个项目超期」。
     #
     # UpwardNotifyLog 仍然**逐品**写：它是按 (label, object_id, event_type, date) 去重的，
     # 逐品写才能保证「今天已经通知过的品」明天不会再被算进来。

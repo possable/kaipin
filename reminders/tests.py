@@ -280,7 +280,7 @@ class StageOverdueAggregationTest(TestCase):
         self.assertEqual(len(calls), 1, '6 个超期阶段应收敛成 1 条消息')
 
         content = calls[0][0][1]
-        self.assertIn('你负责的 3 个品存在超期任务', content)
+        self.assertIn('您负责的 3 个项目存在超期任务', content)
         for p_idx in (1, 2, 3):
             self.assertIn(f'{p_idx}. 阶段聚合品{p_idx}', content)
             # 同一个品下的两个阶段合并到同一行，并带阶段负责人
@@ -529,7 +529,7 @@ class ReminderScanModeTest(TestCase):
         joined = '\n'.join(c[0][1] for c in mock_send.call_args_list)
         self.assertIn('距离截止还有 2 天', joined)
         self.assertNotIn('已超期', joined)
-        self.assertNotIn('个品存在超期任务', joined)
+        self.assertNotIn('个项目存在超期任务', joined)
         # 到期前提醒仍保留原来的「姓名 + 你好」开头
         self.assertIn('执行人你好，我是项目管理智能机器人。', joined)
         # 管理员不收到期前提醒
@@ -755,7 +755,7 @@ class StageOwnerOverdueAggregationTest(TestCase):
         calls1 = [c for c in mock_send.call_args_list if c[0][0] == 'wx_stage_owner1']
         self.assertEqual(len(calls1), 1, '一个人负责多个阶段也只发一条')
         content1 = calls1[0][0][1]
-        self.assertIn('你负责的 2 个阶段存在超期任务', content1)
+        self.assertIn('您负责的 2 个阶段存在超期任务', content1)
         self.assertIn('1. 阶段负责人测试品', content1)
         self.assertIn(
             '超期阶段：包装设计（阶段负责人甲）、营销策划（阶段负责人甲）',
@@ -795,8 +795,8 @@ class StageOwnerOverdueAggregationTest(TestCase):
         calls = [c for c in mock_send.call_args_list if c[0][0] == 'wx_stage_owner1']
         self.assertEqual(len(calls), 1)
         content = calls[0][0][1]
-        self.assertIn('你负责的 1 个品存在超期任务', content)
-        self.assertNotIn('你负责的 2 个阶段存在超期任务', content)
+        self.assertIn('您负责的 1 个项目存在超期任务', content)
+        self.assertNotIn('您负责的 2 个阶段存在超期任务', content)
 
 
 class PausedProductNotificationTest(TestCase):
@@ -1379,7 +1379,7 @@ class LiangZiAngAllOverdueRolesTest(TestCase):
         self.assertEqual(len(contents), 4, f'四个角色应各一条，实际：{contents}')
 
         # 1) 执行人：名下 2 件超期任务合并成一条
-        executor = [m for m in contents if '你有 2 个事项已超期' in m]
+        executor = [m for m in contents if '您有 2 个事项已超期' in m]
         self.assertEqual(len(executor), 1, contents)
         self.assertIn(
             '1. “角色测试品A”·“策划”·“执行人视角任务”', executor[0],
@@ -1391,14 +1391,14 @@ class LiangZiAngAllOverdueRolesTest(TestCase):
         self.assertIn('已超期 1 天', executor[0])
 
         # 2) 阶段负责人：品B 的超期阶段汇总
-        stage_owner = [m for m in contents if '你负责的 1 个阶段存在超期任务' in m]
+        stage_owner = [m for m in contents if '您负责的 1 个阶段存在超期任务' in m]
         self.assertEqual(len(stage_owner), 1, contents)
         self.assertIn('1. 角色测试品B', stage_owner[0])
         self.assertIn('超期阶段：设计（梁子昂）', stage_owner[0])
         self.assertIn('超期任务：设计任务1', stage_owner[0])
 
         # 3) 项目负责人：品A 的超期阶段汇总（含具体超期任务名）
-        product_owner = [m for m in contents if '你负责的 1 个品存在超期任务' in m]
+        product_owner = [m for m in contents if '您负责的 1 个项目存在超期任务' in m]
         self.assertEqual(len(product_owner), 1, contents)
         self.assertIn('1. 角色测试品A', product_owner[0])
         self.assertIn('超期阶段：策划（策划同事）', product_owner[0])
@@ -1408,7 +1408,7 @@ class LiangZiAngAllOverdueRolesTest(TestCase):
         )
 
         # 4) 管理员：所有超期品汇总
-        admin = [m for m in contents if '你有 2 个品存在超期任务' in m]
+        admin = [m for m in contents if '您有 2 个项目存在超期任务' in m]
         self.assertEqual(len(admin), 1, contents)
         self.assertIn('超期阶段：策划（策划同事）', admin[0])
         self.assertIn('超期阶段：设计（梁子昂）', admin[0])
@@ -1474,7 +1474,7 @@ class ExecutorOverdueAggregationTest(TestCase):
         self.assertEqual(len(calls), 1, '两件超期任务应合并成一条')
 
         content = calls[0][0][1]
-        self.assertIn('你有 2 个事项已超期，请尽快处理：', content)
+        self.assertIn('您有 2 个事项已超期，请尽快处理：', content)
         self.assertIn('1. “执行人聚合品1”·“阶段1”·“超期任务1”', content)
         self.assertIn('2. “执行人聚合品2”·“阶段2”·“超期任务2”', content)
         self.assertIn('已超期 1 天', content)
@@ -1507,7 +1507,7 @@ class ExecutorOverdueAggregationTest(TestCase):
         self.assertEqual(len(calls), 1)
         content = calls[0][0][1]
         self.assertIn(
-            '你负责的“执行人聚合品1”项目，在“阶段1”阶段的“超期任务1”事项',
+            '您负责的“执行人聚合品1”项目，在“阶段1”阶段的“超期任务1”事项',
             content,
         )
         self.assertIn('但已超期 1 天，请尽快处理！', content)

@@ -118,11 +118,11 @@ def notify_upward(entity, event_type, actor=None):
                 '如需了解详情，可在“项目归档”页面查看。'
             )
         elif task_name:
-            situation = f'你负责的“{product_name}”项目，“{stage_name}”阶段的“{task_name}”已{event_label}，请关注。'
+            situation = f'您负责的“{product_name}”项目，“{stage_name}”阶段的“{task_name}”已{event_label}，请关注。'
         elif stage_name:
-            situation = f'你负责的“{product_name}”项目，“{stage_name}”阶段已{event_label}，请关注。'
+            situation = f'您负责的“{product_name}”项目，“{stage_name}”阶段已{event_label}，请关注。'
         else:
-            situation = f'你负责的“{product_name}”项目已{event_label}，请关注。'
+            situation = f'您负责的“{product_name}”项目已{event_label}，请关注。'
 
         if event_type == 'overdue' or is_product_completion:
             greeting = '您好，'
@@ -414,10 +414,10 @@ def notify_products_overdue_upward(products):
                 lines.append(f'   超期任务：{task_text}')
 
     situation = (
-        f'你有 {len(products)} 个品存在超期任务，请关注：\n'
+        f'您有 {len(products)} 个项目存在超期任务，请关注：\n'
         + '\n'.join(lines)
     )
-    summary = f'{len(products)} 个品超期'
+    summary = f'{len(products)} 个项目超期'
 
     sent = 0
     for recipient in recipients:
@@ -476,10 +476,10 @@ def notify_stages_overdue_upward(stages):
                 lines.append(f'   超期任务：{task_text}')
 
         situation = (
-            f'你负责的 {len(per_product)} 个品存在超期任务，请关注：\n'
+            f'您负责的 {len(per_product)} 个项目存在超期任务，请关注：\n'
             + '\n'.join(lines)
         )
-        summary = f'{len(per_product)} 个品存在超期任务'
+        summary = f'{len(per_product)} 个项目存在超期任务'
 
         if send_notice(
             recipient, situation, 'stage', own_stages[0].pk, summary,
@@ -538,7 +538,7 @@ def notify_stage_owners_overdue_upward(stages):
                 lines.append(f'   超期任务：{task_text}')
 
         situation = (
-            f'你负责的 {len(own_stages)} 个阶段存在超期任务，请关注：\n'
+            f'您负责的 {len(own_stages)} 个阶段存在超期任务，请关注：\n'
             + '\n'.join(lines)
         )
         summary = f'{len(own_stages)} 个阶段存在超期任务'
@@ -708,7 +708,7 @@ def notify_incomplete_tasks_upward(stage_tasks):
             continue
 
         situation = (
-            f'你负责的阶段有 {len(lines)} 个子任务必填信息未填写，请补全：\n'
+            f'您负责的阶段有 {len(lines)} 个子任务必填信息未填写，请补全：\n'
             + '\n'.join(lines)
         )
         first_stage = items[0][0]
